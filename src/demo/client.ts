@@ -1,6 +1,7 @@
 // Browser script of the demo, kept as a string so the Worker needs no asset pipeline.
 // It never uses innerHTML: all dynamic text goes through textContent.
 import { DICTIONARIES } from "./langs.js";
+import { DEBUG_SCROLL_JS } from "./debug-scroll.js";
 import { FORMAT_MONEY_SOURCE, MONEY_FORMATS } from "../i18n/money.js";
 import { LUHN_SOURCE, TEST_CARDS } from "./cards.js";
 
@@ -617,4 +618,4 @@ export const APP_JS = CLIENT_JS
   .replace("__BLIK_DELAY__", () => String(BLIK_DELAY_SECONDS))
   .replace("__BANK_DELAY__", () => String(BANK_DELAY_MS))
   .replace("__FORMAT_MONEY__", () => FORMAT_MONEY_SOURCE)
-  .replace("__LUHN__", () => LUHN_SOURCE);
+  .replace("__LUHN__", () => LUHN_SOURCE) + "\n" + DEBUG_SCROLL_JS;
