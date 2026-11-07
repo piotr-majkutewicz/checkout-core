@@ -11,6 +11,7 @@ export const INDEX_HTML = String.raw`<!doctype html>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div class="sim" role="note"><div class="wrap"><strong>Demo with simulated payment and parcel-locker providers. No real payments or shipments.</strong></div></div>
 <header class="top">
   <div class="wrap">
     <h1>checkout-core</h1>
@@ -22,6 +23,9 @@ export const INDEX_HTML = String.raw`<!doctype html>
   <section id="panel" aria-live="polite"></section>
   <p id="error" class="error" role="alert" hidden></p>
 </main>
+<aside class="wrap cta" aria-label="About the author">
+  <p>Need a shop built or fixed? <a href="https://piotrmajkutewicz.pl" rel="noopener">Talk to Piotr Majkutewicz.</a></p>
+</aside>
 <footer class="wrap muted small">Demo only. Nothing here is a real payment, and nothing is legal or tax advice.</footer>
 <script src="/app.js" defer></script>
 </body>
@@ -31,6 +35,11 @@ export const INDEX_HTML = String.raw`<!doctype html>
 export const STYLE_CSS = String.raw`:root{--bg:#14110f;--fg:#f2ebdd;--muted:#a99f90;--line:#2f2823;--line2:#4a4038;--accent:#ef4444;--card:#1b1714}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.sim{background:var(--accent);color:#14110f;padding:10px 0;font-size:.95rem;text-align:center}
+.cta{margin-top:24px}
+.cta p{border:1px solid var(--line2);border-radius:12px;padding:16px;margin:0}
+.cta a{color:var(--fg);font-weight:600;text-underline-offset:3px;display:inline-block;min-height:24px}
+.cta a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wrap{max-width:760px;margin:0 auto;padding:0 16px}
 .top{border-bottom:1px solid var(--line);padding:24px 0 16px;margin-bottom:16px}
 h1{margin:0 0 4px;font-size:1.6rem}

@@ -126,3 +126,15 @@ describe("not indexed on purpose", () => {
     expect((await call(app, "/sitemap.xml")).status).toBe(404);
   });
 });
+
+describe("public demo framing", () => {
+  it("shows the simulation banner and the call to action without external resources", async () => {
+    const html = (await call(createApp({}, () => NOW), "/")).data as string;
+    expect(html).toContain("Demo with simulated payment and parcel-locker providers. No real payments or shipments.");
+    expect(html).toContain("Need a shop built or fixed?");
+    expect(html).toMatch(/<a href="https:\/\/piotrmajkutewicz\.pl" rel="noopener">Talk to Piotr Majkutewicz\.<\/a>/);
+    // Only the owner's link may point off-site; scripts and styles are same-origin.
+    const urls = [...html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)].map((m) => m[1]);
+    expect(urls).toEqual(["https://piotrmajkutewicz.pl"]);
+  });
+});
