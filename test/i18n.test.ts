@@ -109,7 +109,7 @@ describe("API error codes", () => {
   it("every code the API returns has a UI text in both languages", async () => {
     const app = createApp({}, () => NOW);
     const post = (path: string, body: unknown) => app(new Request(`http://localhost${path}`, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }));
-    const order = { items: [{ sku: "MUG-01", quantity: 1 }], lockerCode: "WAW123M", method: "card" };
+    const order = { items: [{ sku: "MUG-01", quantity: 1 }], lockerCode: "WAW123M", method: "card", cardScenario: "success" };
     const responses = [
       await post("/api/quote", { items: [] }),
       await post("/api/quote", { items: [{ sku: "NOPE", quantity: 1 }] }),
@@ -120,6 +120,8 @@ describe("API error codes", () => {
       await post("/api/orders", { ...order, method: "x" }),
       await post("/api/orders", { ...order, method: "blik", blikCode: "1" }),
       await post("/api/orders", { ...order, lockerCode: "bad" }),
+      await post("/api/orders", { ...order, cardScenario: "x" }),
+      await post("/api/orders/ord_x/settle", { outcome: "x" }),
       await post("/api/orders", { ...order, lockerCode: "ZZZ999Z" }),
       await post("/api/orders", { items: [{ sku: "LAMP-01", quantity: 3 }], method: "card", lockerCode: "GDA010N" }),
       await post("/api/orders/ord_none/ship", {}),
