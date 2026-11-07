@@ -185,6 +185,7 @@ const CLIENT_JS = String.raw`(function () {
         var prev = ol.querySelector(".latest");
         if (prev) prev.classList.remove("latest");
         li.classList.add("new", "latest");
+        li.addEventListener("animationend", function (ev) { if (ev.target === li) li.classList.remove("new"); });
       }
       ol.appendChild(li);
     }
