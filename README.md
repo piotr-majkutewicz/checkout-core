@@ -10,6 +10,14 @@ The worked example is the Polish market, because that is where it was built for:
 
 Intended address: **https://checkout.piotrmajkutewicz.pl**. It is only live after the Worker has been deployed to that domain (see [Deploying the demo](#deploying-the-demo)); until then the link does not work. The demo uses simulated payment and parcel-locker providers: no real payments or shipments, ever. It is deliberately [not indexed by search engines](#not-indexed-on-purpose).
 
+## Languages
+
+The demo UI is **Polish by default**, whatever the browser's language, and can be switched to English with the PL / EN buttons in the header. The choice is remembered in `localStorage` (the page works without it), and `?lang=pl` or `?lang=en` in the address takes precedence and is saved as the choice. `<html lang>` follows the selected language.
+
+All user-facing texts live in two dictionaries, `src/i18n/pl.ts` and `src/i18n/en.ts`; a test checks that both have the same keys, no empty texts and the same placeholders. The library core (VAT, cart, state machine, providers) contains no UI texts for the interface and does not depend on the language. The demo API returns a stable error `code` (plus a short English `error` for people reading raw JSON), and the UI translates the code. A few strings produced by the mock providers (for example the reason in a recorded webhook anomaly) stay English in the data; the UI maps them to its own texts.
+
+Amounts are always PLN; only the conventions change with the language: Polish shows `1 234,56 zł` (non-breaking space as thousands separator, decimal comma), English shows `PLN 1,234.56`. The rule is in `src/i18n/money.ts`, and the same function runs in the browser and in the tests.
+
 ## What it is for
 
 It is a portfolio piece showing how I approach the unglamorous, expensive-to-get-wrong parts of an online shop:

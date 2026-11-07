@@ -75,7 +75,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-appl
 h1{margin:0 0 4px;font-size:1.6rem}
 h2{margin:0 0 12px;font-size:1.25rem}
 .muted{color:var(--muted)}
-.small{font-size:.85rem;padding:24px 16px}
+.small{font-size:.85rem}
+footer.small{padding:24px 16px}
 .steps{display:flex;gap:8px;list-style:none;padding:0;margin:0 0 16px;flex-wrap:wrap}
 .steps li{border:1px solid var(--line);border-radius:999px;padding:4px 12px;color:var(--muted);font-size:.9rem}
 .steps li.active{border-color:var(--accent);color:var(--fg)}
