@@ -1,6 +1,7 @@
 export const STYLE_CSS = String.raw`:root{--bg:#14110f;--fg:#f2ebdd;--muted:#a99f90;--line:#2f2823;--line2:#4a4038;--accent:#ef4444;--card:#1b1714;--ok:#86efac;--warn:#fca5a5}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
+html{background:#14110f;color-scheme:dark}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-wrap:break-word}
 .wrap{max-width:760px;margin:0 auto;padding:0 16px}
 .sim{background:var(--accent);color:#14110f;padding:10px 0;font-size:.95rem;text-align:center}

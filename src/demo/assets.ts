@@ -27,6 +27,8 @@ export function indexHtml(lang: Lang): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14110f">
+<meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex, nofollow">
 <title>${esc(d.htmlTitle)}</title>
 <link rel="stylesheet" href="/style.css">
