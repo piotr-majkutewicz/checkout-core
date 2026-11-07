@@ -103,7 +103,7 @@ const CLIENT_JS = String.raw`(function () {
     var d = e.data || {};
     switch (e.kind) {
       case "cart_priced": return t("log.cart_priced", { lines: d.lines, total: money(d.totalGross), vat: money(d.totalVat) });
-      case "order_created": return t("log.order_created", { id: d.orderId });
+      case "order_created": return t("log.order_created", { id: d.orderId, total: money(d.totalGross) });
       case "payment_requested": return t("log.payment_requested", { method: label("method", d.method), amount: money(d.amount), paymentId: d.paymentId });
       case "payment_settled": return t("log.payment_settled", { outcome: label("log.payment_settled", d.outcome) });
       case "webhook_sent": return t("log.webhook_sent", { type: label("webhook.type", d.type), eventId: d.eventId });

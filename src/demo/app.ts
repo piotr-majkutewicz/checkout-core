@@ -29,7 +29,7 @@ export const DEMO_LIMITS = {
   maxCartLines: 20,
   maxQuantity: 99,
   /** Requests per client IP per window. */
-  rateLimit: 60,
+  rateLimit: 120,
   rateWindowMs: 60_000,
   /** Distinct client IPs tracked by the in-memory fallback limiter. */
   maxTrackedClients: 1000,
@@ -245,11 +245,6 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
 
       const totals = priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE });
       if (totals.totalGross <= 0) throw new HttpError(400, "nothing_to_pay");
-      trace.add("cart_priced", {
-        lines: cart.lines.length, itemsGross: totals.itemsGross, discountTotal: totals.discountTotal, shippingGross: totals.shippingGross,
-        totalGross: totals.totalGross, totalNet: totals.totalNet, totalVat: totals.totalVat, vat: totals.vat,
-      });
-
       // The demo picks the mock operator's scenario explicitly (the core's own BLIK test codes stay untouched).
       let scenario: "success" | "declined" | "delayed" = "success";
       let flow: "blik_app" | "three_ds" | "bank" | null = null;
@@ -266,7 +261,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
 
       const id = `ord_${crypto.randomUUID().slice(0, 8)}`;
       let order = applyEvent(createOrder(id, totals, now().toISOString()), "payment_started", now().toISOString());
-      trace.add("order_created", { orderId: id, totalGross: totals.totalGross });
+      trace.add("order_created", { orderId: id, totalGross: totals.totalGross, totalVat: totals.totalVat, lines: cart.lines.length });
       traceTransitions(trace, undefined, order);
       const payment = await payments.createPayment({
         orderId: id,

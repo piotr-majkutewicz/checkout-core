@@ -5,10 +5,10 @@
   // Custom domain: wrangler creates the DNS record and certificate on deploy.
   // The zone piotrmajkutewicz.pl must be on the Cloudflare account you deploy with.
   "routes": [{ "pattern": "checkout.piotrmajkutewicz.pl", "custom_domain": true }],
-  // Per-IP rate limit used by the Worker (60 requests per minute). Not an account ID:
+  // Per-IP rate limit used by the Worker (120 requests per minute). Not an account ID:
   // namespace_id is any integer you choose, unique within your account.
   "ratelimits": [
-    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } }
   ],
   "vars": {
     // Not a secret: the mock provider only signs fake events. A real operator's secret

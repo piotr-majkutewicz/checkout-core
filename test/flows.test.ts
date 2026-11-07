@@ -55,7 +55,7 @@ describe("behind the scenes trace", () => {
   it("describes the whole chain with timestamps in order", async () => {
     const call = setup();
     const r = await call("/api/orders", "POST", { ...base, method: "card", cardScenario: "success" });
-    expect(kinds(r)).toEqual(["cart_priced", "order_created", "order_transition", "payment_requested", "webhook_sent", "signature_ok", "order_transition"]);
+    expect(kinds(r)).toEqual(["order_created", "order_transition", "payment_requested", "webhook_sent", "signature_ok", "order_transition"]);
     const sent = r.data.trace.find((e: any) => e.kind === "webhook_sent");
     expect(sent.data.headers["x-mock-signature"]).toMatch(/^sha256=[0-9a-f]{64}$/);
     expect(r.data.trace.every((e: any) => e.at === NOW.toISOString())).toBe(true);

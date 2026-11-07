@@ -201,7 +201,7 @@ export const en = {
   "anomaly.generic": "An unusual payment notification was recorded.",
 
   "log.cart_priced": "Cart priced: {lines} lines, {total} to pay, of which VAT {vat}. All amounts are whole grosze, no fractions.",
-  "log.order_created": "Order {id} created.",
+  "log.order_created": "Order {id} created from the cart quote, {total} to pay.",
   "log.payment_requested": "Payment order sent to the (simulated) operator: {method}, amount {amount}, payment id {paymentId}.",
   "log.payment_settled": "The simulated operator settles the payment: {outcome}.",
   "log.payment_settled.succeeded": "success",

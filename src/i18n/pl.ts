@@ -201,7 +201,7 @@ export const pl: Dict = {
   "anomaly.generic": "Zapisano nietypowe powiadomienie o płatności.",
 
   "log.cart_priced": "Koszyk policzony: {lines} poz., do zapłaty {total}, w tym VAT {vat}. Wszystkie kwoty są w pełnych groszach, bez ułamków.",
-  "log.order_created": "Utworzono zamówienie {id}.",
+  "log.order_created": "Utworzono zamówienie {id} na podstawie wyceny koszyka, do zapłaty {total}.",
   "log.payment_requested": "Zlecenie płatności poszło do operatora (symulowanego): {method}, kwota {amount}, identyfikator płatności {paymentId}.",
   "log.payment_settled": "Symulowany operator rozstrzyga płatność: {outcome}.",
   "log.payment_settled.succeeded": "sukces",
