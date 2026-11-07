@@ -15,8 +15,11 @@ export interface DemoEnv {
   MOCK_WEBHOOK_SECRET?: string;
 }
 
+// The public demo must not be indexed. Crawlers have to be able to fetch pages to see this
+// header, so robots.txt allows everything and noindex is the only signal.
 const SECURITY_HEADERS = {
-  "content-security-policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+  "x-robots-tag": "noindex, nofollow",
+  "content-security-policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
 };
@@ -32,6 +35,12 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...SECURITY_HEADERS },
   });
+}
+
+/** Last line of defence: whatever a route returned, the headers are there. */
+function withSecurityHeaders(res: Response): Response {
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) if (!res.headers.has(k)) res.headers.set(k, v);
+  return res;
 }
 
 function asset(body: string, type: string): Response {
@@ -110,6 +119,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     if (method === "GET" && path === "/") return asset(INDEX_HTML, "text/html");
     if (method === "GET" && path === "/app.js") return asset(APP_JS, "text/javascript");
     if (method === "GET" && path === "/style.css") return asset(STYLE_CSS, "text/css");
+    if (method === "GET" && path === "/robots.txt") return asset("User-agent: *\nAllow: /\n", "text/plain");
 
     if (method === "GET" && path === "/api/catalog") {
       return json({
@@ -233,7 +243,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
 
   return async function handle(request: Request): Promise<Response> {
     try {
-      return await route(request);
+      return withSecurityHeaders(await route(request));
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       if (e instanceof ShippingError) return json({ error: e.message, code: e.code }, 400);

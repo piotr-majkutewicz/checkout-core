@@ -97,3 +97,32 @@ describe("demo app", () => {
     expect((await call(app, "/api/webhooks/mock", "POST", { id: "x" }, { "x-mock-signature": "sha256=00", "x-mock-timestamp": "1" })).status).toBe(401);
   });
 });
+
+describe("not indexed on purpose", () => {
+  const paths: Array<[string, string]> = [
+    ["GET", "/"], ["GET", "/app.js"], ["GET", "/style.css"], ["GET", "/robots.txt"], ["GET", "/api/catalog"],
+    ["GET", "/nope"], ["POST", "/api/quote"], ["POST", "/api/webhooks/mock"], ["GET", "/api/orders/ord_x"],
+  ];
+
+  it("sends X-Robots-Tag on every response, errors included", async () => {
+    const app = createApp({}, () => NOW);
+    for (const [method, path] of paths) {
+      const res = await app(new Request(`http://localhost${path}`, { method, body: method === "POST" ? "{}" : undefined }));
+      expect(res.headers.get("x-robots-tag"), `${method} ${path}`).toBe("noindex, nofollow");
+    }
+  });
+
+  it("puts a robots meta tag in the HTML", async () => {
+    const html = (await call(createApp({}, () => NOW), "/")).data as string;
+    expect(html).toContain('<meta name="robots" content="noindex, nofollow">');
+  });
+
+  it("robots.txt allows crawling so that noindex can be read, and there is no sitemap", async () => {
+    const app = createApp({}, () => NOW);
+    const robots = await call(app, "/robots.txt");
+    expect(robots.status).toBe(200);
+    expect(robots.data).toBe("User-agent: *\nAllow: /\n");
+    expect(robots.data).not.toMatch(/disallow|sitemap/i);
+    expect((await call(app, "/sitemap.xml")).status).toBe(404);
+  });
+});

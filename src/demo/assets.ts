@@ -6,6 +6,7 @@ export const INDEX_HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>checkout-core demo</title>
 <link rel="stylesheet" href="/style.css">
 </head>
