@@ -4,7 +4,9 @@ A small reference implementation of the **core of a web shop checkout**: money, 
 
 The worked example is the Polish market, because that is where it was built for: BLIK, parcel lockers (paczkomaty), Polish VAT rates, the 14-day withdrawal right. The structure is not Poland-specific. Swap the data and the providers and the same core serves any market with similar needs.
 
-![Demo screenshot](docs/demo.png)
+![Demo screenshot, desktop](docs/demo.png)
+
+<img src="docs/demo-mobile.png" alt="Demo screenshot, phone" width="240">
 
 ## Live demo
 
@@ -129,10 +131,19 @@ npm ci
 npm test            # Vitest, runs offline
 npm run typecheck   # tsc --noEmit, strict mode
 npm run dev         # wrangler dev, the demo at http://localhost:8787
+npm run e2e         # Playwright checks (Polish text, mobile layout and touch scrolling), see below
 npm run deploy      # wrangler deploy (needs your own Cloudflare account)
 ```
 
-Demo walkthrough: add products, apply a code (`SAVE10` or `MINUS20`), pick a payment method, pick a locker (for example `WAW123M`), place the order. BLIK code `222222` is declined, `333333` is delayed, other 6-digit codes succeed; bank transfer is always asynchronous. On the confirmation screen you can confirm a delayed payment, ship, mark as picked up, request a refund, and replay the last webhook to see idempotency at work.
+Demo walkthrough: the page has an intro, then two columns. On the left is the shop as a customer sees it (cart, payment, parcel locker, confirmation); on the right, "Behind the scenes" is a timestamped log of what the system does: cart pricing and VAT, the payment order sent to the (simulated) operator, the signed webhook with its HMAC verification, every order status change and the shipment label. Each entry can be expanded to its raw JSON. On a phone the two columns become two tabs.
+
+Simulated payments, all through `MockProvider` with no network access:
+
+- **BLIK**: `111111` is declined, `222222` stays pending for a few seconds (a countdown, then the confirmation webhook arrives), any other 6-digit code succeeds. The demo selects the mock operator's scenario explicitly, so the core's own test codes (`222222`, `333333` in `MockProvider`) are not used by the UI.
+- **Card**: a form with Luhn validation that accepts only three made-up test numbers: `4242 4242 4242 4242` succeeds, `4000 0000 0000 0002` is declined, `4000 0000 0000 3220` opens a simulated 3-D Secure screen (approve or reject). The browser sends only the chosen scenario to the demo API; the number never leaves the page.
+- **Bank transfer**: a simulated bank screen; after you confirm, the webhook arrives a moment later.
+
+After a purchase, three buttons show the reliability guarantees, with the result visible in the log: send the same webhook again (duplicate, order unchanged), send one with a wrong signature (rejected with 401), send a late out-of-order "payment failed" notice (ignored, state unchanged). The order summary has a VAT table per rate, delivery, discount, the withdrawal period (illustration, not legal advice), the parcel label and a status timeline.
 
 `wrangler.jsonc` contains no account identifiers or secrets. `MOCK_WEBHOOK_SECRET` is a throwaway value that only signs fake events.
 
@@ -154,6 +165,10 @@ Public-demo safeguards in the code: at most 200 orders (and mock payments) are k
 
 Every response carries `X-Robots-Tag: noindex, nofollow` and the page has `<meta name="robots" content="noindex, nofollow">`. `/robots.txt` allows everything on purpose: if crawling were disallowed, search engines could not read the `noindex` and might still list the bare URL. There is no sitemap.
 
+### End-to-end checks
+
+`npm run e2e` starts `wrangler dev` on port 8941 (or uses `E2E_BASE_URL`) and drives the UI with Playwright (browsers need to be installed: `npx playwright install chromium`). It walks the whole path in Polish and fails if any visible text or accessible name contains typical English words (a short list of deliberate exceptions such as BLIK, JSON, HMAC, 3-D Secure, webhook, VAT is stripped first), and on an iPhone 13 profile it checks on every step that the page is not wider than the screen, that real touch swipes scroll down and back up, that re-rendering does not move the scroll position and that touch targets are at least 44 px.
+
 ### Demo endpoints
 
 | Method and path | Purpose |
@@ -162,9 +177,11 @@ Every response carries `X-Robots-Tag: noindex, nofollow` and the page has `<meta
 | `POST /api/quote` | Price a cart |
 | `POST /api/orders` | Create an order and start payment |
 | `GET /api/orders/:id` | Read an order |
-| `POST /api/orders/:id/settle` | Resolve a delayed mock payment |
+| `POST /api/orders/:id/settle` | Resolve a pending mock payment (`{"outcome":"succeeded"\|"failed"}`) |
 | `POST /api/orders/:id/ship`, `/deliver`, `/refund` | Move the order along |
-| `POST /api/orders/:id/redeliver` | Replay the last webhook |
+| `POST /api/orders/:id/redeliver` | Replay the last webhook (duplicate) |
+| `POST /api/orders/:id/forge` | Send the last webhook with a changed body and the old signature (401) |
+| `POST /api/orders/:id/late` | Send a genuine but outdated "payment failed" event (ignored) |
 | `POST /api/webhooks/mock` | Signed webhook receiver |
 
 The UI builds all dynamic content with `textContent` (never `innerHTML`, which a test checks), the Worker sends a strict Content-Security-Policy, and nothing is loaded from a CDN.

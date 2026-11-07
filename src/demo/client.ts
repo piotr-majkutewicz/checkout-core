@@ -430,6 +430,8 @@ const CLIENT_JS = String.raw`(function () {
     return el("pre", { text: lines.join("\n") });
   }
 
+  function add(parent, node) { if (node) parent.appendChild(node); }
+
   function viewConfirm() {
     var o = state.order;
     var p = el("div");
@@ -443,17 +445,17 @@ const CLIENT_JS = String.raw`(function () {
       el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.locker") }), el("span", { text: o.lockerCode })]),
       o.trackingNumber ? el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.tracking") }), el("span", { text: o.trackingNumber })]) : null
     ]));
-    p.appendChild(flowCard());
+    add(p, flowCard());
     var a = el("div", { class: "actions" });
     if (o.state === "paid") a.appendChild(actionButton("/ship", t("action.ship"), true));
     if (o.state === "shipped") a.appendChild(actionButton("/deliver", t("action.deliver"), true));
     if (["paid", "shipped", "fulfilled"].indexOf(o.state) >= 0) a.appendChild(actionButton("/refund", t("action.refund")));
     a.appendChild(el("button", { type: "button", text: t("action.startOver"), onclick: startOver }));
     p.appendChild(a);
-    p.appendChild(labelBox(o));
+    add(p, labelBox(o));
     p.appendChild(summaryCard(o));
     p.appendChild(el("div", { class: "card" }, [el("h3", { text: t("timeline.title") }), timeline(o)]));
-    p.appendChild(reliability());
+    add(p, reliability());
     if (o.anomalies.length) {
       var box = el("div", { class: "error" }, [el("strong", { text: t("anomalies.title") })]);
       o.anomalies.forEach(function (x) {

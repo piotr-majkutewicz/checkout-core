@@ -40,6 +40,18 @@ describe("dictionaries", () => {
     }
   });
 
+  it("cover every trace kind, reliability outcome, webhook error and guide state", () => {
+    const kinds = ["cart_priced", "order_created", "payment_requested", "payment_settled", "webhook_sent", "signature_ok", "order_transition", "webhook_duplicate", "webhook_ignored", "webhook_rejected", "shipment_created", "refund_requested", "redelivered", "forged_sent", "stale_sent"];
+    for (const d of [pl, en] as Array<Record<string, string>>) {
+      for (const k of kinds) expect(d[`log.${k}`], k).toBeTruthy();
+      for (const o of ["applied", "duplicate", "rejected", "ignored", "unknown_order"]) expect(d[`rel.result.${o}`], o).toBeTruthy();
+      for (const c of ["bad_signature", "bad_timestamp", "bad_payload"]) expect(d[`webhook.error.${c}`], c).toBeTruthy();
+      for (const st of ORDER_STATES) expect(d[`guide.confirm.${st}`], st).toBeTruthy();
+      for (const r of ["stale_sequence", "payment_mismatch", "amount_mismatch", "transition_not_allowed"]) expect(d[`anomaly.${r}`], r).toBeTruthy();
+      for (const s of ["pending", "succeeded", "failed", "refunded"]) expect(d[`paystatus.${s}`], s).toBeTruthy();
+    }
+  });
+
   it("translate Polish for real: texts differ from English", () => {
     expect(pl["step.cart"]).toBe("Koszyk");
     expect(pl["step.locker"]).toBe("Paczkomat");
