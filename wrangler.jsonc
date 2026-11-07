@@ -1,0 +1,10 @@
+{
+  "name": "checkout-core-demo",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-07",
+  "vars": {
+    // Not a secret: the mock provider only signs fake events. A real operator's secret
+    // belongs in `wrangler secret put`, never in this file.
+    "MOCK_WEBHOOK_SECRET": "demo-only-not-a-secret"
+  }
+}
