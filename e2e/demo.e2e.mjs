@@ -322,3 +322,150 @@ describe("mobile (iPhone 13)", () => {
     await ctx.close();
   });
 });
+
+/* ------------------------------------------------------------------ loading states and motion */
+
+/** Slows down matching API calls so that loading states can be observed. */
+async function delayApi(page, pattern, ms, method = "POST") {
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== method) return route.continue();
+    await new Promise((r) => setTimeout(r, ms));
+    return route.continue();
+  });
+}
+
+/** Installs an in-page stopwatch: time from the click to the first button that reports aria-busy. */
+async function installStopwatch(page) {
+  await page.evaluate(() => {
+    window.__t0 = 0;
+    window.__t1 = 0;
+    document.addEventListener("click", () => { window.__t0 = performance.now(); window.__t1 = 0; }, true);
+    new MutationObserver(() => {
+      if (!window.__t1 && document.querySelector("button[aria-busy=true]")) window.__t1 = performance.now();
+    }).observe(document.body, { subtree: true, attributes: true, childList: true, attributeFilter: ["aria-busy"] });
+  });
+}
+const reaction = (page) => page.evaluate(() => (window.__t1 ? window.__t1 - window.__t0 : -1));
+
+async function toLocker(page, { blik = "123456" } = {}) {
+  await page.goto(BASE + "/");
+  await page.waitForSelector("#panel h3");
+  await page.click("button.primary:has-text('Przejdź do płatności')");
+  await page.fill("#blik", blik);
+  await page.click("button.primary:has-text('Przejdź do paczkomatu')");
+  await page.click("label.opt:has-text('WAW123M')");
+}
+
+describe("loading states", () => {
+  it("every request-backed button reacts within 100 ms, blocks double clicks and keeps its width", async () => {
+    const ctx = await newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+    const posts = [];
+    page.on("request", (r) => r.method() === "POST" && posts.push(new URL(r.url()).pathname));
+    await delayApi(page, "**/api/**", 700);
+    await toLocker(page);
+    await installStopwatch(page);
+
+    async function pressAndCheck(selector, label, expectedPostSuffix, { settle = ".badge", live = true } = {}) {
+      const btn = page.locator(selector).first();
+      const width = (await btn.boundingBox()).width;
+      const before = posts.filter((p) => p.endsWith(expectedPostSuffix)).length;
+      await btn.dblclick();
+      await page.waitForSelector("button[aria-busy=true]", { timeout: 1000 });
+      const ms = await reaction(page);
+      assert.ok(ms >= 0 && ms < 100, `${label}: reaction took ${ms} ms`);
+      console.log(`# ${label}: loading state after ${ms.toFixed(1)} ms`);
+      const busy = page.locator("button[aria-busy=true]").first();
+      assert.match(await busy.innerText(), /Przetwarzam/, `${label}: busy label`);
+      assert.equal(await busy.locator(".spinner").count(), 1, `${label}: spinner`);
+      assert.equal(await busy.isDisabled(), true, `${label}: disabled while busy`);
+      const busyWidth = (await busy.boundingBox()).width;
+      assert.ok(busyWidth >= width - 1, `${label}: width shrank ${width} -> ${busyWidth}`);
+      // "Start over" immediately moves on to pricing the cart, so its announcement is replaced at once.
+      if (live) assert.equal((await page.locator("#live").innerText()).trim(), "Przetwarzam…", `${label}: live region`);
+      // Everything on screen while loading is Polish too.
+      assert.deepEqual(findEnglish(await visibleText(page)), [], `${label}: English text while loading`);
+      await page.waitForSelector("button[aria-busy=true]", { state: "detached", timeout: 5000 });
+      assert.equal(posts.filter((p) => p.endsWith(expectedPostSuffix)).length - before, 1, `${label}: exactly one request after a double click`);
+      await page.waitForSelector(settle);
+    }
+
+    await pressAndCheck("button.primary:has-text('Złóż zamówienie')", "place order", "/api/orders");
+    await page.waitForSelector(".outcome.ok svg.check");
+    await pressAndCheck("button:has-text('Wyślij to samo powiadomienie jeszcze raz')", "redeliver", "/redeliver", { settle: "text=rozpoznano duplikat" });
+    await pressAndCheck("button.primary:has-text('Wyślij do paczkomatu')", "ship", "/ship", { settle: "pre:has-text('Etykieta')" });
+    await pressAndCheck("button:has-text('Poproś o zwrot pieniędzy')", "refund", "/refund", { settle: ".badge:has-text('zwrócone')" });
+    await pressAndCheck("button:has-text('Zacznij od nowa')", "start over", "/api/quote", { settle: "#panel h3:has-text('Koszyk')", live: false });
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  });
+
+  it("shows waiting states with a loader and a clear outcome", async () => {
+    const ctx = await newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    // BLIK 222222: loader plus countdown, then an animated success tick.
+    await toLocker(page, { blik: "222222" });
+    await page.click("button.primary:has-text('Złóż zamówienie')");
+    await page.waitForSelector("#countdown");
+    assert.equal(await page.locator(".waiting .spinner").count(), 1);
+    assert.match(await page.locator(".waiting").first().innerText(), /Czekam na potwierdzenie w aplikacji banku/);
+    assert.match(await page.locator("#countdown").innerText(), /za \d s/);
+    await page.waitForSelector(".outcome.ok.fx svg.check path", { timeout: 15000 });
+    assert.match(await page.locator("#live").innerText(), /Stan zamówienia: opłacone/);
+    // Declined BLIK 111111: visible, readable message and a shake.
+    await page.click("button:has-text('Zacznij od nowa')");
+    await page.waitForSelector("#panel h3:has-text('Koszyk')");
+    await toLocker(page, { blik: "111111" });
+    await page.click("button.primary:has-text('Złóż zamówienie')");
+    await page.waitForSelector(".outcome.bad.fx");
+    assert.match(await page.locator(".outcome.bad").innerText(), /Płatność odrzucona/);
+    assert.equal(await page.locator(".outcome.bad").getAttribute("role"), "alert");
+    assert.equal(await page.locator(".outcome.bad").evaluate((n) => getComputedStyle(n).animationName), "shake");
+    await ctx.close();
+  });
+
+  it("animates new log entries, the step pills and the status badge", async () => {
+    const ctx = await newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    await toLocker(page);
+    assert.notEqual(await page.locator(".steps li").first().evaluate((n) => getComputedStyle(n).transitionDuration), "0s");
+    await page.click("button.primary:has-text('Złóż zamówienie')");
+    await page.waitForSelector(".badge:has-text('opłacone')");
+    const entry = page.locator("#log li.new.latest").last();
+    assert.equal(await entry.evaluate((n) => getComputedStyle(n).animationName), "slide-in");
+    assert.equal(await page.locator("#log li.latest").count(), 1, "exactly one highlighted entry");
+    await page.click("button.primary:has-text('Wyślij do paczkomatu')");
+    await page.waitForSelector(".badge.pop:has-text('wysłane')");
+    assert.equal(await page.locator(".badge.pop").evaluate((n) => getComputedStyle(n).animationName), "pop");
+    await ctx.close();
+  });
+
+  it("turns animations off with prefers-reduced-motion", async () => {
+    const ctx = await newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
+    const page = await ctx.newPage();
+    await delayApi(page, "**/api/orders", 600);
+    await toLocker(page);
+    await page.click("button.primary:has-text('Złóż zamówienie')");
+    await page.waitForSelector("button[aria-busy=true] .spinner");
+    // The spinner stays as a static marker next to the text; nothing moves.
+    assert.equal(await page.locator("button[aria-busy=true] .spinner").evaluate((n) => getComputedStyle(n).animationName), "none");
+    await page.waitForSelector(".outcome.ok");
+    const none = await page.evaluate(() => {
+      const names = [".outcome", "#log li.new", ".badge", ".steps li"].map((s) => {
+        const n = document.querySelector(s);
+        const cs = n && getComputedStyle(n);
+        return cs ? `${s}:${cs.animationName}:${cs.transitionDuration}` : `${s}:missing`;
+      });
+      return names;
+    });
+    for (const line of none) {
+      assert.match(line, /:none:0s$/, `reduced motion: ${line}`);
+    }
+    const tick = await page.locator(".outcome.ok.fx path").evaluate((n) => getComputedStyle(n).strokeDashoffset);
+    assert.equal(parseFloat(tick), 0, "the tick is simply visible");
+    await ctx.close();
+  });
+});

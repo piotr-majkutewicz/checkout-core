@@ -67,6 +67,7 @@ export function indexHtml(lang: Lang): string {
   <p><span ${t("ctaLead")}>${esc(d.ctaLead)}</span> <a href="https://piotrmajkutewicz.pl" rel="noopener" ${t("ctaLink")}>${esc(d.ctaLink)}</a></p>
 </aside>
 <footer class="wrap muted small" ${t("footer")}>${esc(d.footer)}</footer>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 <script src="/app.js" defer></script>
 </body>
 </html>

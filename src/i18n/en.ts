@@ -106,7 +106,7 @@ export const en = {
   "product.LAMP-01.name": "Desk lamp",
   "product.LAMP-01.desc": "Bulky enough to need a bigger locker",
 
-  "flow.blik.title": "Waiting for confirmation in the banking app",
+  "flow.blik.title": "Waiting for confirmation in the banking app…",
   "flow.blik.text": "We simulate the customer approving the BLIK payment on their phone. Confirmation arrives in {n} s.",
   "flow.threeds.title": "Simulated 3-D Secure screen of the bank",
   "flow.threeds.text": "The bank asks for an extra confirmation of the card payment. This is only a simulation.",
@@ -116,6 +116,12 @@ export const en = {
   "flow.bank.text": "Transfer of {amount} to the demo shop. In a real bank you approve it in the app or on the bank's website.",
   "flow.bank.confirm": "Confirm the transfer in the bank",
   "flow.bank.processing": "The bank is processing the transfer, the shop's notification will arrive in a moment.",
+
+  "busy.processing": "Processing…",
+  "busy.quote": "Pricing the cart…",
+  "live.order": "Order status: {state}.",
+  "outcome.success": "Payment accepted.",
+  "outcome.failed": "Payment declined. Start over and choose another code or payment method.",
 
   "confirm.title": "Order {id}",
   "confirm.status": "Order status",

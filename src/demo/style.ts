@@ -83,5 +83,40 @@ footer.small{padding:24px 16px}
   .demo[data-view=shop] #col-back,.demo[data-view=backstage] #col-shop{display:block}
   .demo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px}
 }
-@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* Loading states and small animations. Everything below is switched off or simplified for reduced motion. */
+.spinner{display:inline-block;width:1em;height:1em;margin-right:.5em;vertical-align:-.15em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+button[aria-busy=true]{opacity:.85;cursor:progress}
+.waiting{display:flex;align-items:center;gap:0;margin:0 0 8px}
+.waiting .spinner{width:1.1em;height:1.1em;flex-shrink:0}
+p.waiting{font-size:1rem;font-weight:400}
+.steps li{transition:border-color .3s ease,color .3s ease,background-color .3s ease}
+.steps li.active{background:var(--card)}
+.totals{position:relative;transition:opacity .2s ease}
+.totals.pending{opacity:.6}
+.totals.pending::after{content:"";position:absolute;top:12px;right:12px;width:14px;height:14px;border:2px solid var(--muted);border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+.badge.pop{animation:pop .45s ease}
+.outcome{display:flex;align-items:center;gap:12px;min-height:44px;padding:10px 12px;border:1px solid var(--line2);border-radius:8px;margin-bottom:12px}
+.outcome.ok{border-color:#4ade80;color:var(--ok)}
+.outcome.bad{border-color:var(--accent);color:var(--warn)}
+.outcome.bad.fx{animation:shake .45s ease}
+.outcome .cross{font-size:1.6rem;line-height:1;width:28px;text-align:center;flex-shrink:0}
+.check{width:28px;height:28px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.outcome.fx .check circle{stroke-dasharray:63;stroke-dashoffset:63;animation:draw .5s ease forwards}
+.outcome.fx .check path{stroke-dasharray:20;stroke-dashoffset:20;animation:draw .35s ease .4s forwards}
+.log li.new{animation:slide-in .35s ease}
+.log li.latest p{animation:glow 1.8s ease-out}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes pop{0%{transform:scale(.8);opacity:.4}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+@keyframes slide-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@keyframes glow{from{background:rgba(239,68,68,.25)}to{background:transparent}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  .spinner{border-right-color:currentColor;border-style:dotted}
+  .outcome.fx .check circle,.outcome.fx .check path{stroke-dasharray:none;stroke-dashoffset:0}
+  .log li.latest p{background:rgba(239,68,68,.15)}
+}
 `;

@@ -106,7 +106,7 @@ export const pl: Dict = {
   "product.LAMP-01.name": "Lampka biurkowa",
   "product.LAMP-01.desc": "Na tyle duża, że potrzebuje większego paczkomatu",
 
-  "flow.blik.title": "Oczekuje na potwierdzenie w aplikacji banku",
+  "flow.blik.title": "Czekam na potwierdzenie w aplikacji banku…",
   "flow.blik.text": "Symulujemy klienta, który zatwierdza płatność BLIK w telefonie. Potwierdzenie przyjdzie za {n} s.",
   "flow.threeds.title": "Symulowany ekran 3-D Secure w banku",
   "flow.threeds.text": "Bank prosi o dodatkowe potwierdzenie płatności kartą. To tylko symulacja.",
@@ -116,6 +116,12 @@ export const pl: Dict = {
   "flow.bank.text": "Przelew na kwotę {amount} dla sklepu demo. W prawdziwym banku zatwierdzasz go w aplikacji albo w serwisie banku.",
   "flow.bank.confirm": "Potwierdź przelew w banku",
   "flow.bank.processing": "Bank przetwarza przelew, powiadomienie dla sklepu przyjdzie za chwilę.",
+
+  "busy.processing": "Przetwarzam…",
+  "busy.quote": "Liczę koszyk…",
+  "live.order": "Stan zamówienia: {state}.",
+  "outcome.success": "Płatność przyjęta.",
+  "outcome.failed": "Płatność odrzucona. Zacznij od nowa i wybierz inny kod lub sposób płatności.",
 
   "confirm.title": "Zamówienie {id}",
   "confirm.status": "Stan zamówienia",

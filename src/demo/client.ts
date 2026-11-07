@@ -28,7 +28,7 @@ const CLIENT_JS = String.raw`(function () {
   function fresh() {
     return { step: 0, catalog: null, qty: {}, discount: "", method: "blik", blik: "123456",
       card: { number: "", expiry: "12/30", cvc: "123" }, cardScenario: "success", locker: "", quote: null,
-      order: null, paymentStatus: null, withdrawal: null, shipment: null, flow: null, relResult: "", errorCode: "", log: [], view: "shop", busy: false };
+      order: null, fx: "", shownState: "", paymentStatus: null, withdrawal: null, shipment: null, flow: null, relResult: "", errorCode: "", log: [], view: "shop", busy: false };
   }
 
   function save(l) { try { localStorage.setItem("lang", l); } catch (e) { /* storage may be blocked */ } }
@@ -93,6 +93,50 @@ const CLIENT_JS = String.raw`(function () {
 
   function clearTimers() { timers.forEach(function (id) { clearTimeout(id); clearInterval(id); }); timers = []; }
 
+  /* ---------- loading states ---------- */
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  function spinner() { return el("span", { class: "spinner", "aria-hidden": "true" }); }
+  /** Announces a short message to screen readers (the live region is visually hidden). */
+  function say(text) { var n = $("live"); if (n) n.textContent = text; }
+  /** Turns a button into its loading state at once: spinner, new label, no more clicks. The width is kept so nothing shifts. */
+  function setBusy(btn) {
+    if (!btn) return;
+    btn.style.minWidth = btn.offsetWidth + "px";
+    btn.setAttribute("aria-busy", "true");
+    btn.disabled = true;
+    btn.textContent = "";
+    btn.appendChild(spinner());
+    btn.appendChild(document.createTextNode(t("busy.processing")));
+  }
+  /** Runs one request-backed action exactly once at a time; the page re-renders (or shows the error) when it ends. */
+  function act(btn, fn) {
+    if (state.busy) return;
+    state.busy = true;
+    setBusy(btn);
+    if (btn) say(t("busy.processing"));
+    var p;
+    try { p = fn(); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).then(function () { state.busy = false; }, function (e) { fail(e); render(); });
+  }
+  function markQuote(on) {
+    var n = document.querySelector(".totals");
+    if (n) { n.classList.toggle("pending", on); n.setAttribute("aria-busy", String(on)); }
+    if (on) say(t("busy.quote"));
+  }
+  function checkSvg() {
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("class", "check");
+    svg.setAttribute("aria-hidden", "true");
+    var ring = document.createElementNS(SVG_NS, "circle");
+    ring.setAttribute("cx", "12"); ring.setAttribute("cy", "12"); ring.setAttribute("r", "10");
+    var tick = document.createElementNS(SVG_NS, "path");
+    tick.setAttribute("d", "M7 12.5l3.2 3.2L17 8.8");
+    svg.appendChild(ring); svg.appendChild(tick);
+    return svg;
+  }
+
   function items() {
     return Object.keys(state.qty).filter(function (s) { return state.qty[s] > 0; }).map(function (s) { return { sku: s, quantity: state.qty[s] }; });
   }
@@ -134,7 +178,16 @@ const CLIENT_JS = String.raw`(function () {
   function renderLog(all) {
     var ol = $("log");
     if (all) { ol.textContent = ""; renderedLog = 0; }
-    for (; renderedLog < state.log.length; renderedLog++) ol.appendChild(logItem(state.log[renderedLog], renderedLog));
+    for (; renderedLog < state.log.length; renderedLog++) {
+      var li = logItem(state.log[renderedLog], renderedLog);
+      if (!all) {
+        // New entries slide in and the newest one is highlighted for a moment. Scrolling is never touched.
+        var prev = ol.querySelector(".latest");
+        if (prev) prev.classList.remove("latest");
+        li.classList.add("new", "latest");
+      }
+      ol.appendChild(li);
+    }
     $("log-empty").hidden = state.log.length > 0;
     var n = state.log.length;
     $("count").textContent = "(" + n + ")";
@@ -167,9 +220,16 @@ const CLIENT_JS = String.raw`(function () {
 
   function renderSteps() {
     var ol = $("steps");
-    ol.textContent = "";
+    // Update the pills in place so that CSS can animate the change of the active step.
+    if (ol.children.length !== STEP_KEYS.length) {
+      ol.textContent = "";
+      STEP_KEYS.forEach(function () { ol.appendChild(el("li")); });
+    }
     STEP_KEYS.forEach(function (key, i) {
-      ol.appendChild(el("li", { class: i === state.step ? "active" : i < state.step ? "done" : "", "aria-current": i === state.step ? "step" : null, text: (i + 1) + ". " + t(key) }));
+      var li = ol.children[i];
+      li.className = i === state.step ? "active" : i < state.step ? "done" : "";
+      if (i === state.step) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
+      li.textContent = (i + 1) + ". " + t(key);
     });
   }
 
@@ -181,7 +241,7 @@ const CLIENT_JS = String.raw`(function () {
   }
 
   function totalsCard(q) {
-    var card = el("div", { class: "card" });
+    var card = el("div", { class: "card totals" });
     function line(text, value) { card.appendChild(el("div", { class: "row" }, [el("span", { class: "grow", text: text }), el("span", { class: "price", text: value })])); }
     line(t("totals.goods"), money(q.itemsGross));
     if (q.discountTotal > 0) line(t("totals.discount"), "-" + money(q.discountTotal));
@@ -193,6 +253,7 @@ const CLIENT_JS = String.raw`(function () {
 
   function refreshQuote() {
     if (items().length === 0) { state.quote = null; render(); return Promise.resolve(); }
+    markQuote(true);
     return api("/api/quote", "POST", { items: items(), discountCode: state.discount }).then(function (q) { state.quote = q; addTrace(q.trace); showError(""); render(); })
       .catch(function (e) { state.quote = null; fail(e); render(); });
   }
@@ -299,12 +360,17 @@ const CLIENT_JS = String.raw`(function () {
     if (state.quote) p.appendChild(totalsCard(state.quote));
     p.appendChild(el("div", { class: "actions" }, [
       el("button", { type: "button", text: t("pay.back"), onclick: function () { goStep(1); } }),
-      el("button", { type: "button", class: "primary", text: t("locker.place"), onclick: placeOrder })
+      el("button", { type: "button", class: "primary", text: t("locker.place"), onclick: function (ev) { placeOrder(ev.currentTarget); } })
     ]));
     return p;
   }
 
   function applyResponse(d) {
+    var prev = state.order;
+    var next = d.order.state;
+    // A payment result is announced and animated once, when the order first reaches it.
+    state.fx = (next === "paid" || next === "payment_failed") && (!prev || prev.id !== d.order.id || prev.state !== next) ? next : "";
+    if (!prev || prev.id !== d.order.id || prev.state !== next) say(t("live.order", { state: label("state", next) }));
     state.order = d.order;
     state.paymentStatus = d.paymentStatus || null;
     state.withdrawal = d.withdrawal || null;
@@ -312,28 +378,25 @@ const CLIENT_JS = String.raw`(function () {
     addTrace(d.trace);
   }
 
-  function placeOrder() {
-    if (state.busy) return;
-    state.busy = true;
+  function placeOrder(btn) {
     var body = { items: items(), discountCode: state.discount, method: state.method, lockerCode: state.locker };
     if (state.method === "blik") body.blikCode = state.blik;
     if (state.method === "card") body.cardScenario = state.cardScenario;
-    api("/api/orders", "POST", body)
-      .then(function (d) {
-        state.busy = false; state.flow = d.flow; state.relResult = ""; state.shipment = null;
+    act(btn, function () {
+      return api("/api/orders", "POST", body).then(function (d) {
+        state.flow = d.flow; state.relResult = ""; state.shipment = null; state.shownState = "";
         applyResponse(d); showError(""); state.step = 3; render(); ensureVisible($("steps")); startFlow();
-      })
-      .catch(fail);
+      });
+    });
   }
 
   /* ---------- simulated payment flows ---------- */
 
-  function settle(outcome) {
-    if (state.busy) return;
-    state.busy = true;
-    api("/api/orders/" + state.order.id + "/settle", "POST", { outcome: outcome })
-      .then(function (d) { state.busy = false; state.flow = null; applyResponse(d); showError(""); render(); })
-      .catch(fail);
+  function settle(outcome, btn) {
+    act(btn, function () {
+      return api("/api/orders/" + state.order.id + "/settle", "POST", { outcome: outcome })
+        .then(function (d) { state.flow = null; applyResponse(d); showError(""); render(); });
+    });
   }
 
   function startFlow() {
@@ -353,22 +416,22 @@ const CLIENT_JS = String.raw`(function () {
     if (!state.flow || state.order.state !== "awaiting_payment") return null;
     var card = el("div", { class: "card" });
     if (state.flow === "blik_app") {
-      card.appendChild(el("h3", { text: t("flow.blik.title") }));
+      card.appendChild(el("h3", { class: "waiting" }, [spinner(), t("flow.blik.title")]));
       card.appendChild(el("p", { id: "countdown", role: "timer", text: t("flow.blik.text", { n: BLIK_DELAY }) }));
     } else if (state.flow === "three_ds") {
       card.appendChild(el("h3", { text: t("flow.threeds.title") }));
       card.appendChild(el("p", { text: t("flow.threeds.text") }));
       card.appendChild(el("div", { class: "actions" }, [
-        el("button", { type: "button", class: "primary", text: t("flow.threeds.approve"), onclick: function () { settle("succeeded"); } }),
-        el("button", { type: "button", text: t("flow.threeds.reject"), onclick: function () { settle("failed"); } })
+        el("button", { type: "button", class: "primary", text: t("flow.threeds.approve"), onclick: function (ev) { settle("succeeded", ev.currentTarget); } }),
+        el("button", { type: "button", text: t("flow.threeds.reject"), onclick: function (ev) { settle("failed", ev.currentTarget); } })
       ]));
     } else {
       card.appendChild(el("h3", { text: t("flow.bank.title") }));
       card.appendChild(el("p", { text: t("flow.bank.text", { amount: money(state.order.totals.totalGross) }) }));
       card.appendChild(el("div", { class: "actions" }, [
         el("button", { type: "button", class: "primary", id: "bank-confirm", text: t("flow.bank.confirm"), onclick: function (ev) {
-          ev.target.disabled = true;
-          card.appendChild(el("p", { role: "status", text: t("flow.bank.processing") }));
+          setBusy(ev.currentTarget);
+          card.appendChild(el("p", { class: "waiting", role: "status" }, [spinner(), t("flow.bank.processing")]));
           timers.push(setTimeout(function () { settle("succeeded"); }, BANK_DELAY));
         } })
       ]));
@@ -379,8 +442,10 @@ const CLIENT_JS = String.raw`(function () {
   /* ---------- confirmation ---------- */
 
   function actionButton(path, text, primary) {
-    return el("button", { type: "button", class: primary ? "primary" : "", text: text, onclick: function () {
-      api("/api/orders/" + state.order.id + path, "POST").then(function (d) { state.relResult = ""; applyResponse(d); showError(""); render(); }).catch(fail);
+    return el("button", { type: "button", class: primary ? "primary" : "", text: text, onclick: function (ev) {
+      act(ev.currentTarget, function () {
+        return api("/api/orders/" + state.order.id + path, "POST").then(function (d) { state.relResult = ""; applyResponse(d); showError(""); render(); });
+      });
     } });
   }
 
@@ -390,8 +455,10 @@ const CLIENT_JS = String.raw`(function () {
     var box = el("div", { class: "card" }, [el("h3", { text: t("rel.title") }), el("p", { class: "muted", text: t("rel.intro") })]);
     [["/redeliver", "rel.again"], ["/forge", "rel.forged"], ["/late", "rel.late"]].forEach(function (x) {
       box.appendChild(el("div", { class: "rel" }, [
-        el("button", { type: "button", text: t(x[1] + ".btn"), onclick: function () {
-          api("/api/orders/" + o.id + x[0], "POST").then(function (d) { state.relResult = d.outcome; applyResponse(d); showError(""); render(); }).catch(fail);
+        el("button", { type: "button", text: t(x[1] + ".btn"), onclick: function (ev) {
+          act(ev.currentTarget, function () {
+            return api("/api/orders/" + o.id + x[0], "POST").then(function (d) { state.relResult = d.outcome; applyResponse(d); showError(""); render(); });
+          });
         } }),
         el("p", { class: "muted small", text: t(x[1] + ".help") })
       ]));
@@ -437,10 +504,16 @@ const CLIENT_JS = String.raw`(function () {
     var p = el("div");
     p.appendChild(guide("guide.confirm." + o.state));
     p.appendChild(el("h3", { text: t("confirm.title", { id: o.id }) }));
+    var fx = state.fx;
+    var changed = state.shownState && state.shownState !== o.state;
+    state.fx = "";
+    state.shownState = o.state;
+    if (o.state === "paid") add(p, el("div", { class: "outcome ok" + (fx ? " fx" : "") }, [checkSvg(), el("span", { text: t("outcome.success") })]));
+    if (o.state === "payment_failed") add(p, el("div", { class: "outcome bad" + (fx ? " fx" : ""), role: "alert" }, [el("span", { class: "cross", "aria-hidden": "true", text: "×" }), el("span", { text: t("outcome.failed") })]));
     var good = o.state === "paid" || o.state === "shipped" || o.state === "fulfilled";
     var bad = o.state === "payment_failed" || o.state === "cancelled";
     p.appendChild(el("div", { class: "card" }, [
-      el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.status") }), el("span", { class: "badge " + (good ? "ok" : bad ? "bad" : ""), text: label("state", o.state) })]),
+      el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.status") }), el("span", { class: "badge " + (good ? "ok" : bad ? "bad" : "") + (changed ? " pop" : ""), text: label("state", o.state) })]),
       el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.payment") }), el("span", { text: label("method", o.paymentMethod) + (state.paymentStatus ? ", " + label("paystatus", state.paymentStatus) : "") })]),
       el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.locker") }), el("span", { text: o.lockerCode })]),
       o.trackingNumber ? el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.tracking") }), el("span", { text: o.trackingNumber })]) : null
@@ -450,7 +523,7 @@ const CLIENT_JS = String.raw`(function () {
     if (o.state === "paid") a.appendChild(actionButton("/ship", t("action.ship"), true));
     if (o.state === "shipped") a.appendChild(actionButton("/deliver", t("action.deliver"), true));
     if (["paid", "shipped", "fulfilled"].indexOf(o.state) >= 0) a.appendChild(actionButton("/refund", t("action.refund")));
-    a.appendChild(el("button", { type: "button", text: t("action.startOver"), onclick: startOver }));
+    a.appendChild(el("button", { type: "button", text: t("action.startOver"), onclick: function (ev) { act(ev.currentTarget, startOver); } }));
     p.appendChild(a);
     add(p, labelBox(o));
     p.appendChild(summaryCard(o));
@@ -484,8 +557,8 @@ const CLIENT_JS = String.raw`(function () {
     openLog = {};
     renderLog(true);
     showError("");
-    refreshQuote();
     ensureVisible($("steps"));
+    return refreshQuote();
   }
 
   function render() {
