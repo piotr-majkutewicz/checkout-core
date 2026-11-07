@@ -161,6 +161,10 @@ Every response carries `X-Robots-Tag: noindex, nofollow` and the page has `<meta
 
 The UI builds all dynamic content with `textContent` (never `innerHTML`, which a test checks), the Worker sends a strict Content-Security-Policy, and nothing is loaded from a CDN.
 
+### Deploying from GitHub Actions
+
+The repository includes a manual workflow (`.github/workflows/deploy.yml`). Add two repository secrets (Settings, Secrets and variables, Actions): `CLOUDFLARE_API_TOKEN` (a token with permission to edit Workers and the DNS zone of the domain) and `CLOUDFLARE_ACCOUNT_ID`. Then run Actions, Deploy, Run workflow on `main`. The workflow runs the type check and the tests first.
+
 ## Adding a real payment operator
 
 Short version: implement `PaymentProvider`, translate the operator's statuses and notifications into `PaymentEvent`, and keep amounts in grosze inside the core, converting only at the adapter boundary. Full guide: [docs/adding-a-payment-operator.md](docs/adding-a-payment-operator.md). The [skeleton](examples/provider-adapter.skeleton.ts) is **unverified**: it has never been run against any operator. Production adapters need a sandbox account with the operator.
