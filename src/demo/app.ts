@@ -1,7 +1,7 @@
 import { type Discount, type CartLine, priceCart } from "../cart.js";
 import { isWithinWithdrawalPeriod, withdrawalLastDay } from "../consumer-law.js";
 import { type Order, applyEvent, createOrder } from "../order.js";
-import { MockProvider } from "../payments/mock.js";
+import { MockProvider, TIMESTAMP_HEADER } from "../payments/mock.js";
 import { WebhookError } from "../payments/types.js";
 import { InMemoryOrderStore, handleWebhook } from "../payments/webhook.js";
 import { MOCK_LOCKERS, MockShippingProvider } from "../shipping/mock.js";
@@ -9,6 +9,8 @@ import { fitParcel } from "../shipping/parcel.js";
 import { validateLockerCode } from "../shipping/locker-code.js";
 import { ShippingError } from "../shipping/types.js";
 import { en } from "../i18n/en.js";
+import { CARD_SCENARIOS, type CardScenario } from "./cards.js";
+import { type Trace, createTrace } from "./trace.js";
 import { APP_JS, DEFAULT_LANG, STYLE_CSS, indexHtml, parseLang } from "./assets.js";
 import { DISCOUNT_CODES, PRODUCTS, SHIPPING_RULE, estimateParcel } from "./catalog.js";
 
@@ -89,12 +91,53 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   const shipping = new MockShippingProvider();
   const lastDelivery = new Map<string, { body: string; headers: Record<string, string> }>();
 
-  /** Stands in for the operator calling our webhook endpoint. */
-  async function flushWebhooks(orderId: string): Promise<void> {
+  /** Adds one trace entry per history step that was added between two versions of an order. */
+  function traceTransitions(trace: Trace, before: Order | undefined, after: Order | undefined): void {
+    if (!after) return;
+    for (const h of after.history.slice(before?.history.length ?? 0)) trace.add("order_transition", { from: h.from, to: h.to, event: h.event, at: h.at });
+  }
+
+  type DeliveryOutcome = "applied" | "duplicate" | "ignored" | "rejected" | "unknown_order";
+
+  /**
+   * Stands in for the operator calling our webhook endpoint: runs one signed delivery through
+   * the real pipeline (signature check, idempotency, state machine) and describes every step.
+   */
+  async function processDelivery(orderId: string, d: { body: string; headers: Record<string, string> }, trace: Trace): Promise<DeliveryOutcome> {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(d.body);
+    } catch {
+      /* the pipeline below reports a bad payload */
+    }
+    const ev = (parsed ?? {}) as Record<string, unknown>;
+    trace.add("webhook_sent", { type: ev["type"], eventId: ev["id"], sequence: ev["sequence"], headers: d.headers, body: parsed });
+    const before = await store.get(orderId);
+    let outcome;
+    try {
+      outcome = await handleWebhook(payments, store, d.body, d.headers, now);
+    } catch (e) {
+      if (!(e instanceof WebhookError)) throw e;
+      trace.add("webhook_rejected", { status: e.code === "bad_payload" ? 400 : 401, code: e.code });
+      return "rejected";
+    }
+    trace.add("signature_ok", { algorithm: "HMAC-SHA256", timestamp: d.headers[TIMESTAMP_HEADER] });
+    if (outcome.status === "applied") {
+      traceTransitions(trace, before, outcome.order);
+    } else if (outcome.status === "duplicate") {
+      trace.add("webhook_duplicate", { eventId: ev["id"] });
+    } else if (outcome.status === "ignored") {
+      trace.add("webhook_ignored", { reason: outcome.reason, eventId: ev["id"] });
+    }
+    return outcome.status;
+  }
+
+  /** Delivers everything the mock operator has queued for this order. */
+  async function flushWebhooks(orderId: string, trace: Trace): Promise<void> {
     for (const d of await payments.takeDeliveries()) {
       lastDelivery.set(orderId, d);
       while (lastDelivery.size > DEMO_LIMITS.maxOrders) lastDelivery.delete(lastDelivery.keys().next().value as string);
-      await handleWebhook(payments, store, d.body, d.headers, now);
+      await processDelivery(orderId, d, trace);
     }
   }
 
@@ -150,10 +193,11 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     return result as Order;
   }
 
-  async function route(request: Request): Promise<Response> {
+  async function route(request: Request, trace: Trace): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
+    const ok = (data: Record<string, unknown>, status = 200) => json({ ...data, trace: trace.entries }, status);
 
     if (method === "GET" && path === "/") return asset(indexHtml(parseLang(url.searchParams.get("lang")) ?? DEFAULT_LANG), "text/html");
     if (method === "GET" && path === "/app.js") return asset(APP_JS, "text/javascript");
@@ -173,17 +217,24 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
       const body = plainObject(await readJson(request));
       onlyKeys(body, ["items", "discountCode"]);
       const cart = buildCart(body);
-      return json(priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE }));
+      const totals = priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE });
+      trace.add("cart_priced", {
+        lines: cart.lines.length, itemsGross: totals.itemsGross, discountTotal: totals.discountTotal, shippingGross: totals.shippingGross,
+        totalGross: totals.totalGross, totalNet: totals.totalNet, totalVat: totals.totalVat, vat: totals.vat,
+      });
+      return ok({ ...totals });
     }
 
     if (method === "POST" && path === "/api/orders") {
       const body = plainObject(await readJson(request));
-      onlyKeys(body, ["items", "discountCode", "method", "blikCode", "lockerCode"]);
+      onlyKeys(body, ["items", "discountCode", "method", "blikCode", "lockerCode", "cardScenario"]);
       const cart = buildCart(body);
       const payMethod = body["method"];
       if (payMethod !== "blik" && payMethod !== "card" && payMethod !== "transfer") throw new HttpError(400, "bad_method");
       const blikCode = optionalString(body, "blikCode", 16);
       if (payMethod === "blik" && !/^\d{6}$/.test(blikCode ?? "")) throw new HttpError(400, "bad_blik");
+      const cardScenario = body["cardScenario"];
+      if (payMethod === "card" && !CARD_SCENARIOS.includes(cardScenario as CardScenario)) throw new HttpError(400, "bad_card_scenario");
       const lockerCheck = validateLockerCode(optionalString(body, "lockerCode", 16) ?? "");
       if (!lockerCheck.valid) throw new HttpError(400, "bad_locker_code");
       const locker = await shipping.getLocker(lockerCheck.code);
@@ -194,41 +245,97 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
 
       const totals = priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE });
       if (totals.totalGross <= 0) throw new HttpError(400, "nothing_to_pay");
+      trace.add("cart_priced", {
+        lines: cart.lines.length, itemsGross: totals.itemsGross, discountTotal: totals.discountTotal, shippingGross: totals.shippingGross,
+        totalGross: totals.totalGross, totalNet: totals.totalNet, totalVat: totals.totalVat, vat: totals.vat,
+      });
+
+      // The demo picks the mock operator's scenario explicitly (the core's own BLIK test codes stay untouched).
+      let scenario: "success" | "declined" | "delayed" = "success";
+      let flow: "blik_app" | "three_ds" | "bank" | null = null;
+      if (payMethod === "blik") {
+        if (blikCode === "111111") scenario = "declined";
+        else if (blikCode === "222222") { scenario = "delayed"; flow = "blik_app"; }
+      } else if (payMethod === "card") {
+        if (cardScenario === "declined") scenario = "declined";
+        else if (cardScenario === "three_ds") { scenario = "delayed"; flow = "three_ds"; }
+      } else {
+        scenario = "delayed";
+        flow = "bank";
+      }
+
       const id = `ord_${crypto.randomUUID().slice(0, 8)}`;
       let order = applyEvent(createOrder(id, totals, now().toISOString()), "payment_started", now().toISOString());
+      trace.add("order_created", { orderId: id, totalGross: totals.totalGross });
+      traceTransitions(trace, undefined, order);
       const payment = await payments.createPayment({
         orderId: id,
         amount: totals.totalGross,
         method: payMethod,
         blikCode: payMethod === "blik" ? blikCode : undefined,
+        metadata: { scenario },
       });
+      trace.add("payment_requested", { paymentId: payment.paymentId, method: payMethod, amount: totals.totalGross, scenario, status: payment.status, nextAction: payment.nextAction ?? null });
       order = { ...order, paymentId: payment.paymentId, paymentMethod: payMethod, lockerCode: locker.code };
       await store.save(order);
-      await flushWebhooks(id);
-      return json({ order: await mustOrder(id), nextAction: payment.nextAction ?? null }, 201);
+      await flushWebhooks(id, trace);
+      return ok({ ...(await withLegal(await mustOrder(id))), flow, nextAction: payment.nextAction ?? null }, 201);
     }
 
     const m = /^\/api\/orders\/([\w-]{1,40})(?:\/([a-z]{1,10}))?$/.exec(path);
     if (m) {
       const id = m[1] as string;
       const action = m[2];
-      if (method === "GET" && !action) return json(await withLegal(await mustOrder(id)));
+      if (method === "GET" && !action) return ok({ ...(await withLegal(await mustOrder(id))) });
       if (method === "POST" && action === "settle") {
+        const body = await readOptionalJson(request);
+        onlyKeys(body, ["outcome"]);
+        const outcome = body["outcome"] ?? "succeeded";
+        if (outcome !== "succeeded" && outcome !== "failed") throw new HttpError(400, "bad_outcome");
         const order = await mustOrder(id);
         if (!order.paymentId) throw new HttpError(409, "no_payment");
         try {
-          payments.settle(order.paymentId, "succeeded");
+          payments.settle(order.paymentId, outcome);
         } catch {
           throw new HttpError(409, "cannot_settle");
         }
-        await flushWebhooks(id);
-        return json(await withLegal(await mustOrder(id)));
+        trace.add("payment_settled", { paymentId: order.paymentId, outcome });
+        await flushWebhooks(id, trace);
+        return ok({ ...(await withLegal(await mustOrder(id))) });
       }
       if (method === "POST" && action === "redeliver") {
         const d = lastDelivery.get(id);
         if (!d) throw new HttpError(404, "no_webhook");
-        const outcome = await handleWebhook(payments, store, d.body, d.headers, now);
-        return json({ outcome: outcome.status, ...(await withLegal(await mustOrder(id))) });
+        trace.add("redelivered", { eventId: (JSON.parse(d.body) as { id?: string }).id });
+        const outcome = await processDelivery(id, d, trace);
+        return ok({ outcome, ...(await withLegal(await mustOrder(id))) });
+      }
+      if (method === "POST" && action === "forge") {
+        // The same delivery with its body changed after signing: the signature no longer matches.
+        const d = lastDelivery.get(id);
+        if (!d) throw new HttpError(404, "no_webhook");
+        const tampered = { ...(JSON.parse(d.body) as Record<string, unknown>), amount: 1 };
+        trace.add("forged_sent", { changedField: "amount", newValue: 1 });
+        const outcome = await processDelivery(id, { body: JSON.stringify(tampered), headers: d.headers }, trace);
+        return ok({ outcome, ...(await withLegal(await mustOrder(id))) });
+      }
+      if (method === "POST" && action === "late") {
+        // A genuine, correctly signed but outdated event: "payment failed" with a sequence number older than the last one applied.
+        const order = await mustOrder(id);
+        if (!order.paymentId || order.lastPaymentSequence < 1) throw new HttpError(409, "action_not_allowed");
+        const sequence = order.lastPaymentSequence - 1;
+        const delivery = await payments.sign({
+          id: `mock_evt_late_${crypto.randomUUID().slice(0, 8)}`,
+          type: "payment.failed",
+          paymentId: order.paymentId,
+          orderId: id,
+          amount: order.totals.totalGross,
+          sequence,
+          occurredAt: now().toISOString(),
+        });
+        trace.add("stale_sent", { sequence, lastApplied: order.lastPaymentSequence });
+        const outcome = await processDelivery(id, delivery, trace);
+        return ok({ outcome, ...(await withLegal(await mustOrder(id))) });
       }
       if (method === "POST" && action === "ship") {
         const order = await mustOrder(id);
@@ -239,19 +346,26 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
           parcel: { lengthMm: 200, widthMm: 150, heightMm: 70, weightG: 800 },
           recipient: { name: "Demo Customer", phone: "+48000000000", email: "demo@example.com" },
         });
+        trace.add("shipment_created", { trackingNumber: shipment.trackingNumber, lockerCode: order.lockerCode, sizeClass: shipment.sizeClass, label: shipment.label.content });
         const next = await transition(id, (o) => ({ ...applyEvent(o, "ship", now().toISOString()), trackingNumber: shipment.trackingNumber }));
-        return json({ ...(await withLegal(next)), label: shipment.label.content });
+        traceTransitions(trace, order, next);
+        return ok({ ...(await withLegal(next)), shipment: { trackingNumber: shipment.trackingNumber, sizeClass: shipment.sizeClass } });
       }
       if (method === "POST" && action === "deliver") {
+        const before = await mustOrder(id);
         const at = now().toISOString();
         const next = await transition(id, (o) => ({ ...applyEvent(o, "deliver", at), deliveredAt: at }));
-        return json(await withLegal(next));
+        traceTransitions(trace, before, next);
+        return ok({ ...(await withLegal(next)) });
       }
       if (method === "POST" && action === "refund") {
+        const before = await mustOrder(id);
         const order = await transition(id, (o) => applyEvent(o, "request_refund", now().toISOString()));
+        traceTransitions(trace, before, order);
+        trace.add("refund_requested", { paymentId: order.paymentId, amount: order.totals.totalGross });
         await payments.refund(order.paymentId as string);
-        await flushWebhooks(id);
-        return json(await withLegal(await mustOrder(id)));
+        await flushWebhooks(id, trace);
+        return ok({ ...(await withLegal(await mustOrder(id))) });
       }
     }
 
@@ -272,10 +386,19 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   }
 
   async function withLegal(order: Order) {
-    if (!order.deliveredAt) return { order };
+    let paymentStatus: string | undefined;
+    if (order.paymentId) {
+      try {
+        paymentStatus = await payments.getStatus(order.paymentId);
+      } catch {
+        paymentStatus = undefined; // evicted from the bounded mock store
+      }
+    }
+    if (!order.deliveredAt) return { order, paymentStatus };
     const at = now();
     return {
       order,
+      paymentStatus,
       withdrawal: {
         lastDay: withdrawalLastDay(order.deliveredAt),
         open: isWithinWithdrawalPeriod(order.deliveredAt, at),
@@ -305,7 +428,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
         limited.headers.set("retry-after", "60");
         return limited;
       }
-      return withSecurityHeaders(await route(request));
+      return withSecurityHeaders(await route(request, createTrace(now)));
     } catch (e) {
       // Error bodies never echo internals: only fixed messages written in this file.
       if (e instanceof HttpError) return errorResponse(e.code, e.status);
@@ -366,6 +489,18 @@ async function readJson(request: Request): Promise<unknown> {
   try {
     return JSON.parse(text);
   } catch {
+    throw new HttpError(400, "bad_json");
+  }
+}
+
+/** Like readJson, but an empty body means "no fields". */
+async function readOptionalJson(request: Request): Promise<Record<string, unknown>> {
+  const text = await readBody(request, DEMO_LIMITS.maxBodyBytes);
+  if (text.trim() === "") return {};
+  try {
+    return plainObject(JSON.parse(text));
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
     throw new HttpError(400, "bad_json");
   }
 }

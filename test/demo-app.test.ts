@@ -79,13 +79,13 @@ describe("demo app", () => {
 
   it("declined BLIK ends in payment_failed", async () => {
     const app = createApp({}, () => NOW);
-    const r = await call(app, "/api/orders", "POST", { ...base, method: "blik", blikCode: "222222" });
+    const r = await call(app, "/api/orders", "POST", { ...base, method: "blik", blikCode: "111111" });
     expect(r.data.order.state).toBe("payment_failed");
   });
 
   it("refund flow ends in refunded", async () => {
     const app = createApp({}, () => NOW);
-    const id = (await call(app, "/api/orders", "POST", { ...base, method: "card" })).data.order.id;
+    const id = (await call(app, "/api/orders", "POST", { ...base, method: "card", cardScenario: "success" })).data.order.id;
     const r = await call(app, `/api/orders/${id}/refund`, "POST");
     expect(r.data.order.state).toBe("refunded");
     expect((await call(app, `/api/orders/${id}/refund`, "POST")).status).toBe(409);

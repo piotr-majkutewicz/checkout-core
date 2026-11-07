@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEMO_LIMITS, createApp, createLocalLimiter } from "../src/demo/app.js";
 
 const NOW = new Date("2026-11-07T12:00:00Z");
-const order = { items: [{ sku: "MUG-01", quantity: 1 }], lockerCode: "WAW123M", method: "card" };
+const order = { items: [{ sku: "MUG-01", quantity: 1 }], lockerCode: "WAW123M", method: "card", cardScenario: "success" };
 const post = (app: ReturnType<typeof createApp>, path: string, body: unknown, headers: Record<string, string> = {}) =>
   app(new Request(`http://localhost${path}`, { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body), headers }));
 
