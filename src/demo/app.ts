@@ -2,7 +2,7 @@ import { type Discount, type CartLine, priceCart } from "../cart.js";
 import { isWithinWithdrawalPeriod, withdrawalLastDay } from "../consumer-law.js";
 import { type Order, applyEvent, createOrder } from "../order.js";
 import { MockProvider } from "../payments/mock.js";
-import { WebhookError, type PaymentMethod } from "../payments/types.js";
+import { WebhookError } from "../payments/types.js";
 import { InMemoryOrderStore, handleWebhook } from "../payments/webhook.js";
 import { MOCK_LOCKERS, MockShippingProvider } from "../shipping/mock.js";
 import { fitParcel } from "../shipping/parcel.js";
@@ -13,7 +13,24 @@ import { DISCOUNT_CODES, PRODUCTS, SHIPPING_RULE, estimateParcel } from "./catal
 
 export interface DemoEnv {
   MOCK_WEBHOOK_SECRET?: string;
+  /** Cloudflare rate limiting binding (see wrangler.jsonc). Optional: without it an in-memory limiter is used. */
+  RATE_LIMITER?: RateLimit;
 }
+
+/** Limits that keep a publicly reachable demo from being used to exhaust memory or CPU. */
+export const DEMO_LIMITS = {
+  /** Orders (and mock payments, and replayable webhooks) kept in memory; the oldest are dropped. */
+  maxOrders: 200,
+  /** Largest accepted request body, in bytes. A full 20-line cart is well under 2 KB. */
+  maxBodyBytes: 4096,
+  maxCartLines: 20,
+  maxQuantity: 99,
+  /** Requests per client IP per window. */
+  rateLimit: 60,
+  rateWindowMs: 60_000,
+  /** Distinct client IPs tracked by the in-memory fallback limiter. */
+  maxTrackedClients: 1000,
+} as const;
 
 // The public demo must not be indexed. Crawlers have to be able to fetch pages to see this
 // header, so robots.txt allows everything and noindex is the only signal.
@@ -55,8 +72,9 @@ function asset(body: string, type: string): Response {
  * A real deployment needs a database; OrderStore is the seam where one plugs in.
  */
 export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date()) {
-  const store = new InMemoryOrderStore();
-  const payments = new MockProvider({ secret: env.MOCK_WEBHOOK_SECRET ?? "demo-only-secret" });
+  const store = new InMemoryOrderStore({ maxOrders: DEMO_LIMITS.maxOrders });
+  const payments = new MockProvider({ secret: env.MOCK_WEBHOOK_SECRET ?? "demo-only-secret", maxPayments: DEMO_LIMITS.maxOrders });
+  const localLimiter = createLocalLimiter(DEMO_LIMITS.rateLimit, DEMO_LIMITS.rateWindowMs, DEMO_LIMITS.maxTrackedClients, () => now().getTime());
   const shipping = new MockShippingProvider();
   const lastDelivery = new Map<string, { body: string; headers: Record<string, string> }>();
 
@@ -64,22 +82,32 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   async function flushWebhooks(orderId: string): Promise<void> {
     for (const d of await payments.takeDeliveries()) {
       lastDelivery.set(orderId, d);
+      while (lastDelivery.size > DEMO_LIMITS.maxOrders) lastDelivery.delete(lastDelivery.keys().next().value as string);
       await handleWebhook(payments, store, d.body, d.headers, now);
     }
   }
 
-  function buildCart(body: unknown): { lines: CartLine[]; items: Array<{ product: (typeof PRODUCTS)[number]; quantity: number }>; discount?: Discount } {
-    const b = body as { items?: Array<{ sku?: unknown; quantity?: unknown }>; discountCode?: unknown } | null;
-    if (!b || !Array.isArray(b.items) || b.items.length === 0 || b.items.length > 20) throw new HttpError(400, "Cart must contain 1 to 20 lines");
-    const items = b.items.map((i) => {
-      const product = PRODUCTS.find((p) => p.sku === i.sku);
-      if (!product) throw new HttpError(400, `Unknown product: ${String(i.sku)}`);
-      if (!Number.isInteger(i.quantity) || (i.quantity as number) < 1 || (i.quantity as number) > 99) throw new HttpError(400, "Quantity must be 1 to 99");
-      return { product, quantity: i.quantity as number };
+  function buildCart(raw: Record<string, unknown>): { lines: CartLine[]; items: Array<{ product: (typeof PRODUCTS)[number]; quantity: number }>; discount?: Discount } {
+    const rawItems = raw["items"];
+    if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > DEMO_LIMITS.maxCartLines) {
+      throw new HttpError(400, `Cart must contain 1 to ${DEMO_LIMITS.maxCartLines} lines`);
+    }
+    const seen = new Set<string>();
+    const items = rawItems.map((entry) => {
+      const i = plainObject(entry, "Cart line");
+      onlyKeys(i, ["sku", "quantity"]);
+      const product = typeof i["sku"] === "string" ? PRODUCTS.find((p) => p.sku === i["sku"]) : undefined;
+      if (!product) throw new HttpError(400, "Unknown product");
+      if (seen.has(product.sku)) throw new HttpError(400, "Each product may appear in the cart only once");
+      seen.add(product.sku);
+      const q = i["quantity"];
+      if (typeof q !== "number" || !Number.isInteger(q) || q < 1 || q > DEMO_LIMITS.maxQuantity) throw new HttpError(400, `Quantity must be 1 to ${DEMO_LIMITS.maxQuantity}`);
+      return { product, quantity: q };
     });
     let discount: Discount | undefined;
-    if (typeof b.discountCode === "string" && b.discountCode.trim() !== "") {
-      discount = DISCOUNT_CODES[b.discountCode.trim().toUpperCase()];
+    const code = optionalString(raw, "discountCode", 32)?.trim();
+    if (code) {
+      discount = Object.hasOwn(DISCOUNT_CODES, code.toUpperCase()) ? DISCOUNT_CODES[code.toUpperCase()] : undefined;
       if (!discount) throw new HttpError(400, "Unknown discount code");
     }
     const lines = items.map(({ product, quantity }) => ({
@@ -97,17 +125,17 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   /** Applies a manual transition (ship, deliver...) and turns state-machine rejections into 409. */
   async function transition(id: string, fn: (o: Order) => Order): Promise<Order> {
     await mustOrder(id);
-    let failure: Error | undefined;
+    let failure: unknown;
     const result = await store.update(id, (o) => {
       try {
         const next = fn(o);
         return { order: next, result: next };
       } catch (e) {
-        failure = e as Error;
+        failure = e;
         return { order: o, result: o };
       }
     });
-    if (failure) throw new HttpError(409, failure.message);
+    if (failure) throw new HttpError(409, "Action not allowed in the current order state");
     return result as Order;
   }
 
@@ -131,17 +159,21 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     }
 
     if (method === "POST" && path === "/api/quote") {
-      const cart = buildCart(await readJson(request));
+      const body = plainObject(await readJson(request), "Request body");
+      onlyKeys(body, ["items", "discountCode"]);
+      const cart = buildCart(body);
       return json(priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE }));
     }
 
     if (method === "POST" && path === "/api/orders") {
-      const body = (await readJson(request)) as Record<string, unknown>;
+      const body = plainObject(await readJson(request), "Request body");
+      onlyKeys(body, ["items", "discountCode", "method", "blikCode", "lockerCode"]);
       const cart = buildCart(body);
-      const payMethod = body["method"] as PaymentMethod;
-      if (!["blik", "card", "transfer"].includes(payMethod)) throw new HttpError(400, "Choose BLIK, card or bank transfer");
-      if (payMethod === "blik" && !/^\d{6}$/.test(String(body["blikCode"] ?? ""))) throw new HttpError(400, "BLIK code must be 6 digits");
-      const lockerCheck = validateLockerCode(String(body["lockerCode"] ?? ""));
+      const payMethod = body["method"];
+      if (payMethod !== "blik" && payMethod !== "card" && payMethod !== "transfer") throw new HttpError(400, "Choose BLIK, card or bank transfer");
+      const blikCode = optionalString(body, "blikCode", 16);
+      if (payMethod === "blik" && !/^\d{6}$/.test(blikCode ?? "")) throw new HttpError(400, "BLIK code must be 6 digits");
+      const lockerCheck = validateLockerCode(optionalString(body, "lockerCode", 16) ?? "");
       if (!lockerCheck.valid) throw new HttpError(400, lockerCheck.reason);
       const locker = await shipping.getLocker(lockerCheck.code);
       if (!locker) throw new HttpError(400, "No such locker in the demo data");
@@ -157,7 +189,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
         orderId: id,
         amount: totals.totalGross,
         method: payMethod,
-        blikCode: typeof body["blikCode"] === "string" ? body["blikCode"] : undefined,
+        blikCode: payMethod === "blik" ? blikCode : undefined,
       });
       order = { ...order, paymentId: payment.paymentId, paymentMethod: payMethod, lockerCode: locker.code };
       await store.save(order);
@@ -165,7 +197,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
       return json({ order: await mustOrder(id), nextAction: payment.nextAction ?? null }, 201);
     }
 
-    const m = /^\/api\/orders\/([\w-]+)(?:\/([\w-]+))?$/.exec(path);
+    const m = /^\/api\/orders\/([\w-]{1,40})(?:\/([a-z]{1,10}))?$/.exec(path);
     if (m) {
       const id = m[1] as string;
       const action = m[2];
@@ -175,8 +207,8 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
         if (!order.paymentId) throw new HttpError(409, "Order has no payment");
         try {
           payments.settle(order.paymentId, "succeeded");
-        } catch (e) {
-          throw new HttpError(409, (e as Error).message);
+        } catch {
+          throw new HttpError(409, "Payment cannot be settled in its current state");
         }
         await flushWebhooks(id);
         return json(await withLegal(await mustOrder(id)));
@@ -213,7 +245,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     }
 
     if (method === "POST" && path === "/api/webhooks/mock") {
-      const raw = await request.text();
+      const raw = await readBody(request, DEMO_LIMITS.maxBodyBytes);
       const headers: Record<string, string> = {};
       request.headers.forEach((v, k) => (headers[k] = v));
       try {
@@ -241,25 +273,104 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     };
   }
 
+  /** Per-IP limit: Cloudflare binding when configured, otherwise a bounded in-memory counter. */
+  async function allowed(request: Request): Promise<boolean> {
+    const ip = request.headers.get("cf-connecting-ip") ?? "local";
+    if (env.RATE_LIMITER) {
+      try {
+        return (await env.RATE_LIMITER.limit({ key: ip })).success;
+      } catch (e) {
+        console.error(e); // a broken limiter must not take the demo down
+        return true;
+      }
+    }
+    return localLimiter(ip);
+  }
+
   return async function handle(request: Request): Promise<Response> {
     try {
+      if (new URL(request.url).pathname.startsWith("/api/") && !(await allowed(request))) {
+        const limited = json({ error: "Too many requests, try again in a minute" }, 429);
+        limited.headers.set("retry-after", "60");
+        return limited;
+      }
       return withSecurityHeaders(await route(request));
     } catch (e) {
+      // Error bodies never echo internals: only fixed messages written in this file.
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
-      if (e instanceof ShippingError) return json({ error: e.message, code: e.code }, 400);
-      if (e instanceof RangeError) return json({ error: e.message }, 400);
+      if (e instanceof ShippingError) return json({ error: "The shipping request was rejected", code: e.code }, 400);
+      if (e instanceof RangeError) return json({ error: "Invalid request" }, 400);
       console.error(e);
       return json({ error: "Internal error" }, 500);
     }
   };
 }
 
+/** Fixed-window counter per key, bounded in memory. Fallback for when no Cloudflare binding is configured. */
+export function createLocalLimiter(limit: number, windowMs: number, maxKeys: number, now: () => number) {
+  const windows = new Map<string, { start: number; count: number }>();
+  return function allow(key: string): boolean {
+    const t = now();
+    let w = windows.get(key);
+    if (!w || t - w.start >= windowMs) {
+      w = { start: t, count: 0 };
+      windows.delete(key);
+      windows.set(key, w);
+      while (windows.size > maxKeys) windows.delete(windows.keys().next().value as string);
+    }
+    w.count++;
+    return w.count <= limit;
+  };
+}
+
+/** Reads a body of at most `max` bytes, refusing early on Content-Length and never buffering more than the cap. */
+async function readBody(request: Request, max: number): Promise<string> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > max) throw new HttpError(413, "Body too large");
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      throw new HttpError(413, "Body too large");
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let offset = 0;
+  for (const c of chunks) {
+    all.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
 async function readJson(request: Request): Promise<unknown> {
-  const text = await request.text();
-  if (text.length > 20_000) throw new HttpError(413, "Body too large");
+  const text = await readBody(request, DEMO_LIMITS.maxBodyBytes);
   try {
     return JSON.parse(text);
   } catch {
     throw new HttpError(400, "Body must be JSON");
   }
+}
+
+function plainObject(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new HttpError(400, `${what} must be a JSON object`);
+  return value as Record<string, unknown>;
+}
+
+function onlyKeys(obj: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) throw new HttpError(400, "Unexpected field in request");
+}
+
+function optionalString(obj: Record<string, unknown>, key: string, maxLength: number): string | undefined {
+  const v = obj[key];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string" || v.length > maxLength) throw new HttpError(400, `Invalid ${key}`);
+  return v;
 }
