@@ -6,6 +6,10 @@ The worked example is the Polish market, because that is where it was built for:
 
 ![Demo screenshot](docs/demo.png)
 
+## Live demo
+
+Intended address: **https://checkout.piotrmajkutewicz.pl**. It is only live after the Worker has been deployed to that domain (see [Deploying the demo](#deploying-the-demo)); until then the link does not work. The demo uses simulated payment and parcel-locker providers: no real payments or shipments, ever. It is deliberately [not indexed by search engines](#not-indexed-on-purpose).
+
 ## What it is for
 
 It is a portfolio piece showing how I approach the unglamorous, expensive-to-get-wrong parts of an online shop:
@@ -126,6 +130,22 @@ Demo walkthrough: add products, apply a code (`SAVE10` or `MINUS20`), pick a pay
 
 **Order state in the demo is in process memory.** It is lost on restart and is not shared between Worker isolates, so it is suitable for a demo only. I chose it over D1 to keep the demo free of setup. `OrderStore` is the seam for a real database: `update` must be an atomic read-modify-write (a transaction or an optimistic version check).
 
+### Deploying the demo
+
+The public demo is the same Worker as `npm run dev`, with a custom domain and a rate limit configured in `wrangler.jsonc`.
+
+1. `npx wrangler login` (opens the browser; no token goes into the repo).
+2. The domain's zone (`piotrmajkutewicz.pl`) must be on the same Cloudflare account.
+3. `npm run deploy`. Because `wrangler.jsonc` has `"routes": [{ "pattern": "checkout.piotrmajkutewicz.pl", "custom_domain": true }]`, wrangler creates the DNS record and certificate for that hostname on deploy. If a DNS record for that name already exists, remove it first.
+4. The `ratelimits` entry gives the Worker a per-IP limit of 60 requests per minute (`namespace_id` is just a number you pick, not an account identifier). Without the binding, for example under `vitest`, the Worker falls back to a small in-memory limiter with the same numbers.
+5. Optional, extra layer: a WAF rate limiting rule for `checkout.piotrmajkutewicz.pl` in the Cloudflare dashboard (Security, WAF, Rate limiting rules). It stops abusive traffic before it reaches the Worker. Which options are available depends on your plan.
+
+Public-demo safeguards in the code: at most 200 orders (and mock payments) are kept in memory, the oldest are dropped; request bodies over 4 KB are refused with 413; every input is validated strictly (unknown fields, wrong types and duplicate cart lines are rejected); error responses carry fixed messages only, never stack traces or echoed input; and the providers are mocks that never open a network connection, so nothing in the demo can reach a real payment or shipping service.
+
+### Not indexed on purpose
+
+Every response carries `X-Robots-Tag: noindex, nofollow` and the page has `<meta name="robots" content="noindex, nofollow">`. `/robots.txt` allows everything on purpose: if crawling were disallowed, search engines could not read the `noindex` and might still list the bare URL. There is no sitemap.
+
 ### Demo endpoints
 
 | Method and path | Purpose |
@@ -152,8 +172,8 @@ Short version: implement `PaymentProvider`, translate the operator's statuses an
 - Parcel size classes, the weight limit and the locker code pattern (`WAW123M`-like) are **example values**, not verified against any carrier's specification. They are configuration; load real ones from your carrier.
 - Parcel estimation in the demo is naive (one rigid box). There is no packing algorithm.
 - Single currency (PLN), no multi-currency, no price-includes-tax switching per customer.
-- No persistence in the demo, no authentication, no rate limiting.
-- Only the mock providers have been exercised. Nothing here has been tested against a real payment operator or carrier.
+- No persistence in the demo and no authentication. The only abuse protection is the per-IP rate limit and the memory caps described above.
+- Only the mock providers have been exercised. Nothing here has been verified against a real payment operator or carrier, and none of the operators or carriers named in this README have been tested.
 
 ## License
 
