@@ -8,7 +8,8 @@ import { MOCK_LOCKERS, MockShippingProvider } from "../shipping/mock.js";
 import { fitParcel } from "../shipping/parcel.js";
 import { validateLockerCode } from "../shipping/locker-code.js";
 import { ShippingError } from "../shipping/types.js";
-import { APP_JS, INDEX_HTML, STYLE_CSS } from "./assets.js";
+import { en } from "../i18n/en.js";
+import { APP_JS, DEFAULT_LANG, STYLE_CSS, indexHtml, parseLang } from "./assets.js";
 import { DISCOUNT_CODES, PRODUCTS, SHIPPING_RULE, estimateParcel } from "./catalog.js";
 
 export interface DemoEnv {
@@ -41,10 +42,20 @@ const SECURITY_HEADERS = {
   "referrer-policy": "no-referrer",
 };
 
+/** Carries a stable error code; the English text for it comes from the dictionary. */
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
+  constructor(readonly status: number, readonly code: ErrorCode) {
+    super(code);
   }
+}
+
+export type ErrorCode = {
+  [K in keyof typeof en]: K extends `err.${infer C}` ? C : never;
+}[keyof typeof en];
+
+/** Error body: a stable `code` for clients (the UI translates it) and a short English `error` for humans reading raw JSON. */
+function errorResponse(code: ErrorCode, status: number): Response {
+  return json({ error: en[`err.${code}`], code }, status);
 }
 
 function json(data: unknown, status = 200): Response {
@@ -90,25 +101,25 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   function buildCart(raw: Record<string, unknown>): { lines: CartLine[]; items: Array<{ product: (typeof PRODUCTS)[number]; quantity: number }>; discount?: Discount } {
     const rawItems = raw["items"];
     if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > DEMO_LIMITS.maxCartLines) {
-      throw new HttpError(400, `Cart must contain 1 to ${DEMO_LIMITS.maxCartLines} lines`);
+      throw new HttpError(400, "cart_lines");
     }
     const seen = new Set<string>();
     const items = rawItems.map((entry) => {
-      const i = plainObject(entry, "Cart line");
+      const i = plainObject(entry);
       onlyKeys(i, ["sku", "quantity"]);
       const product = typeof i["sku"] === "string" ? PRODUCTS.find((p) => p.sku === i["sku"]) : undefined;
-      if (!product) throw new HttpError(400, "Unknown product");
-      if (seen.has(product.sku)) throw new HttpError(400, "Each product may appear in the cart only once");
+      if (!product) throw new HttpError(400, "unknown_product");
+      if (seen.has(product.sku)) throw new HttpError(400, "duplicate_product");
       seen.add(product.sku);
       const q = i["quantity"];
-      if (typeof q !== "number" || !Number.isInteger(q) || q < 1 || q > DEMO_LIMITS.maxQuantity) throw new HttpError(400, `Quantity must be 1 to ${DEMO_LIMITS.maxQuantity}`);
+      if (typeof q !== "number" || !Number.isInteger(q) || q < 1 || q > DEMO_LIMITS.maxQuantity) throw new HttpError(400, "bad_quantity");
       return { product, quantity: q };
     });
     let discount: Discount | undefined;
     const code = optionalString(raw, "discountCode", 32)?.trim();
     if (code) {
       discount = Object.hasOwn(DISCOUNT_CODES, code.toUpperCase()) ? DISCOUNT_CODES[code.toUpperCase()] : undefined;
-      if (!discount) throw new HttpError(400, "Unknown discount code");
+      if (!discount) throw new HttpError(400, "unknown_discount");
     }
     const lines = items.map(({ product, quantity }) => ({
       sku: product.sku, name: product.name, unitGross: product.unitGross, vatRate: product.vatRate, quantity,
@@ -118,7 +129,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
 
   async function mustOrder(id: string): Promise<Order> {
     const order = await store.get(id);
-    if (!order) throw new HttpError(404, "Order not found");
+    if (!order) throw new HttpError(404, "order_not_found");
     return order;
   }
 
@@ -135,7 +146,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
         return { order: o, result: o };
       }
     });
-    if (failure) throw new HttpError(409, "Action not allowed in the current order state");
+    if (failure) throw new HttpError(409, "action_not_allowed");
     return result as Order;
   }
 
@@ -144,7 +155,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     const path = url.pathname;
     const method = request.method;
 
-    if (method === "GET" && path === "/") return asset(INDEX_HTML, "text/html");
+    if (method === "GET" && path === "/") return asset(indexHtml(parseLang(url.searchParams.get("lang")) ?? DEFAULT_LANG), "text/html");
     if (method === "GET" && path === "/app.js") return asset(APP_JS, "text/javascript");
     if (method === "GET" && path === "/style.css") return asset(STYLE_CSS, "text/css");
     if (method === "GET" && path === "/robots.txt") return asset("User-agent: *\nAllow: /\n", "text/plain");
@@ -159,30 +170,30 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
     }
 
     if (method === "POST" && path === "/api/quote") {
-      const body = plainObject(await readJson(request), "Request body");
+      const body = plainObject(await readJson(request));
       onlyKeys(body, ["items", "discountCode"]);
       const cart = buildCart(body);
       return json(priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE }));
     }
 
     if (method === "POST" && path === "/api/orders") {
-      const body = plainObject(await readJson(request), "Request body");
+      const body = plainObject(await readJson(request));
       onlyKeys(body, ["items", "discountCode", "method", "blikCode", "lockerCode"]);
       const cart = buildCart(body);
       const payMethod = body["method"];
-      if (payMethod !== "blik" && payMethod !== "card" && payMethod !== "transfer") throw new HttpError(400, "Choose BLIK, card or bank transfer");
+      if (payMethod !== "blik" && payMethod !== "card" && payMethod !== "transfer") throw new HttpError(400, "bad_method");
       const blikCode = optionalString(body, "blikCode", 16);
-      if (payMethod === "blik" && !/^\d{6}$/.test(blikCode ?? "")) throw new HttpError(400, "BLIK code must be 6 digits");
+      if (payMethod === "blik" && !/^\d{6}$/.test(blikCode ?? "")) throw new HttpError(400, "bad_blik");
       const lockerCheck = validateLockerCode(optionalString(body, "lockerCode", 16) ?? "");
-      if (!lockerCheck.valid) throw new HttpError(400, lockerCheck.reason);
+      if (!lockerCheck.valid) throw new HttpError(400, "bad_locker_code");
       const locker = await shipping.getLocker(lockerCheck.code);
-      if (!locker) throw new HttpError(400, "No such locker in the demo data");
+      if (!locker) throw new HttpError(400, "unknown_locker");
       const fit = fitParcel(estimateParcel(cart.items));
-      if (!fit.fits) throw new HttpError(400, fit.reason);
-      if (!locker.supportedSizes.includes(fit.sizeClass)) throw new HttpError(400, `Locker ${locker.code} cannot take a size ${fit.sizeClass} parcel`);
+      if (!fit.fits) throw new HttpError(400, "parcel_too_big");
+      if (!locker.supportedSizes.includes(fit.sizeClass)) throw new HttpError(400, "locker_too_small");
 
       const totals = priceCart(cart.lines, { discount: cart.discount, shipping: SHIPPING_RULE });
-      if (totals.totalGross <= 0) throw new HttpError(400, "Nothing to pay");
+      if (totals.totalGross <= 0) throw new HttpError(400, "nothing_to_pay");
       const id = `ord_${crypto.randomUUID().slice(0, 8)}`;
       let order = applyEvent(createOrder(id, totals, now().toISOString()), "payment_started", now().toISOString());
       const payment = await payments.createPayment({
@@ -204,24 +215,24 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
       if (method === "GET" && !action) return json(await withLegal(await mustOrder(id)));
       if (method === "POST" && action === "settle") {
         const order = await mustOrder(id);
-        if (!order.paymentId) throw new HttpError(409, "Order has no payment");
+        if (!order.paymentId) throw new HttpError(409, "no_payment");
         try {
           payments.settle(order.paymentId, "succeeded");
         } catch {
-          throw new HttpError(409, "Payment cannot be settled in its current state");
+          throw new HttpError(409, "cannot_settle");
         }
         await flushWebhooks(id);
         return json(await withLegal(await mustOrder(id)));
       }
       if (method === "POST" && action === "redeliver") {
         const d = lastDelivery.get(id);
-        if (!d) throw new HttpError(404, "No webhook delivered yet");
+        if (!d) throw new HttpError(404, "no_webhook");
         const outcome = await handleWebhook(payments, store, d.body, d.headers, now);
         return json({ outcome: outcome.status, ...(await withLegal(await mustOrder(id))) });
       }
       if (method === "POST" && action === "ship") {
         const order = await mustOrder(id);
-        if (order.state !== "paid") throw new HttpError(409, `Cannot ship an order in state ${order.state}`);
+        if (order.state !== "paid") throw new HttpError(409, "ship_not_allowed");
         const shipment = await shipping.createShipment({
           orderId: id,
           lockerCode: order.lockerCode ?? "",
@@ -257,7 +268,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
       }
     }
 
-    throw new HttpError(404, "Not found");
+    throw new HttpError(404, "not_found");
   }
 
   async function withLegal(order: Order) {
@@ -290,18 +301,18 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
   return async function handle(request: Request): Promise<Response> {
     try {
       if (new URL(request.url).pathname.startsWith("/api/") && !(await allowed(request))) {
-        const limited = json({ error: "Too many requests, try again in a minute" }, 429);
+        const limited = errorResponse("rate_limited", 429);
         limited.headers.set("retry-after", "60");
         return limited;
       }
       return withSecurityHeaders(await route(request));
     } catch (e) {
       // Error bodies never echo internals: only fixed messages written in this file.
-      if (e instanceof HttpError) return json({ error: e.message }, e.status);
-      if (e instanceof ShippingError) return json({ error: "The shipping request was rejected", code: e.code }, 400);
-      if (e instanceof RangeError) return json({ error: "Invalid request" }, 400);
+      if (e instanceof HttpError) return errorResponse(e.code, e.status);
+      if (e instanceof ShippingError) return errorResponse("shipping_rejected", 400);
+      if (e instanceof RangeError) return errorResponse("invalid_request", 400);
       console.error(e);
-      return json({ error: "Internal error" }, 500);
+      return errorResponse("internal", 500);
     }
   };
 }
@@ -326,7 +337,7 @@ export function createLocalLimiter(limit: number, windowMs: number, maxKeys: num
 /** Reads a body of at most `max` bytes, refusing early on Content-Length and never buffering more than the cap. */
 async function readBody(request: Request, max: number): Promise<string> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > max) throw new HttpError(413, "Body too large");
+  if (declared > max) throw new HttpError(413, "body_too_large");
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -337,7 +348,7 @@ async function readBody(request: Request, max: number): Promise<string> {
     size += value.byteLength;
     if (size > max) {
       await reader.cancel();
-      throw new HttpError(413, "Body too large");
+      throw new HttpError(413, "body_too_large");
     }
     chunks.push(value);
   }
@@ -355,22 +366,22 @@ async function readJson(request: Request): Promise<unknown> {
   try {
     return JSON.parse(text);
   } catch {
-    throw new HttpError(400, "Body must be JSON");
+    throw new HttpError(400, "bad_json");
   }
 }
 
-function plainObject(value: unknown, what: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new HttpError(400, `${what} must be a JSON object`);
+function plainObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new HttpError(400, "body_not_object");
   return value as Record<string, unknown>;
 }
 
 function onlyKeys(obj: Record<string, unknown>, allowed: readonly string[]): void {
-  for (const k of Object.keys(obj)) if (!allowed.includes(k)) throw new HttpError(400, "Unexpected field in request");
+  for (const k of Object.keys(obj)) if (!allowed.includes(k)) throw new HttpError(400, "unexpected_field");
 }
 
 function optionalString(obj: Record<string, unknown>, key: string, maxLength: number): string | undefined {
   const v = obj[key];
   if (v === undefined || v === null) return undefined;
-  if (typeof v !== "string" || v.length > maxLength) throw new HttpError(400, `Invalid ${key}`);
+  if (typeof v !== "string" || v.length > maxLength) throw new HttpError(400, "invalid_input");
   return v;
 }

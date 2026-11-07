@@ -56,7 +56,7 @@ describe("non-leaky errors", () => {
     const r2 = await (await post(app, "/api/orders", { ...order, lockerCode: "ZZZ999Z" })).text();
     expect(r2).not.toMatch(/stack|at \w+\.|\.ts/);
     const r3 = await app(new Request("http://localhost/api/orders/ord_none/ship", { method: "POST" }));
-    expect(await r3.json()).toEqual({ error: "Order not found" });
+    expect(await r3.json()).toEqual({ error: "Order not found.", code: "order_not_found" });
   });
 
   it("answers an unexpected failure with a fixed 500 body", async () => {
@@ -65,7 +65,7 @@ describe("non-leaky errors", () => {
     const res = await app(new Request("http://localhost/api/catalog"));
     // clock failure happens inside the limiter: still a generic body
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: "Internal error" });
+    expect(await res.json()).toEqual({ error: "Something went wrong on the server.", code: "internal" });
     expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
 });
