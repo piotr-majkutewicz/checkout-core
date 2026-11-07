@@ -1,21 +1,46 @@
 // Static assets of the demo UI, inlined so the Worker needs no asset pipeline and no CDN.
 // The client script never uses innerHTML: all dynamic text goes through textContent.
+// All user-facing texts come from the dictionaries in src/i18n.
 
-export const INDEX_HTML = String.raw`<!doctype html>
-<html lang="en">
+import { type Dict, en } from "../i18n/en.js";
+import { FORMAT_MONEY_SOURCE, MONEY_FORMATS } from "../i18n/money.js";
+import { pl } from "../i18n/pl.js";
+
+export type Lang = "pl" | "en";
+export const DEFAULT_LANG: Lang = "pl";
+export const DICTIONARIES: Record<Lang, Dict> = { pl, en };
+
+export function parseLang(value: string | null | undefined): Lang | undefined {
+  return value === "pl" || value === "en" ? value : undefined;
+}
+
+function esc(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** The page shell, rendered in the requested language. The client script keeps it in sync when the language changes. */
+export function indexHtml(lang: Lang): string {
+  const d = DICTIONARIES[lang];
+  const btn = (l: Lang, label: string, aria: "langPl" | "langEn") =>
+    `<button type="button" data-lang="${l}" lang="${l}" data-i18n-aria="${aria}" aria-label="${esc(d[aria])}" aria-pressed="${l === lang}">${label}</button>`;
+  return `<!doctype html>
+<html lang="${lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>checkout-core demo</title>
+<title>${esc(d.htmlTitle)}</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div class="sim" role="note"><div class="wrap"><strong>Demo with simulated payment and parcel-locker providers. No real payments or shipments.</strong></div></div>
+<div class="sim" role="note"><div class="wrap"><strong data-i18n="banner">${esc(d.banner)}</strong></div></div>
 <header class="top">
   <div class="wrap">
-    <h1>checkout-core</h1>
-    <p class="muted">Demo of a checkout core with Polish market specifics: BLIK, parcel lockers (paczkomaty), VAT rates, 14-day withdrawal. Mock payment and shipping providers, in-memory state.</p>
+    <div>
+      <h1>checkout-core</h1>
+      <p class="muted" data-i18n="headerLead">${esc(d.headerLead)}</p>
+    </div>
+    <div class="lang" role="group" data-i18n-aria="langGroup" aria-label="${esc(d.langGroup)}">${btn("pl", "PL", "langPl")}${btn("en", "EN", "langEn")}</div>
   </div>
 </header>
 <main class="wrap">
@@ -23,14 +48,15 @@ export const INDEX_HTML = String.raw`<!doctype html>
   <section id="panel" aria-live="polite"></section>
   <p id="error" class="error" role="alert" hidden></p>
 </main>
-<aside class="wrap cta" aria-label="About the author">
-  <p>Need a shop built or fixed? <a href="https://piotrmajkutewicz.pl" rel="noopener">Talk to Piotr Majkutewicz.</a></p>
+<aside class="wrap cta">
+  <p><span data-i18n="ctaLead">${esc(d.ctaLead)}</span> <a href="https://piotrmajkutewicz.pl" rel="noopener" data-i18n="ctaLink">${esc(d.ctaLink)}</a></p>
 </aside>
-<footer class="wrap muted small">Demo only. Nothing here is a real payment, and nothing is legal or tax advice.</footer>
+<footer class="wrap muted small" data-i18n="footer">${esc(d.footer)}</footer>
 <script src="/app.js" defer></script>
 </body>
 </html>
 `;
+}
 
 export const STYLE_CSS = String.raw`:root{--bg:#14110f;--fg:#f2ebdd;--muted:#a99f90;--line:#2f2823;--line2:#4a4038;--accent:#ef4444;--card:#1b1714}
 *{box-sizing:border-box}
@@ -41,6 +67,10 @@ body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-appl
 .cta a{color:var(--fg);font-weight:600;text-underline-offset:3px;display:inline-block;min-height:24px}
 .cta a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wrap{max-width:760px;margin:0 auto;padding:0 16px}
+.top .wrap{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.lang{display:flex;gap:8px;flex-shrink:0}
+.lang button{min-width:44px;min-height:44px;padding:0 12px;font-weight:600}
+.lang button[aria-pressed=true]{border-color:var(--accent);background:var(--card)}
 .top{border-bottom:1px solid var(--line);padding:24px 0 16px;margin-bottom:16px}
 h1{margin:0 0 4px;font-size:1.6rem}
 h2{margin:0 0 12px;font-size:1.25rem}
@@ -73,10 +103,31 @@ pre{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);borde
 ul.hist{margin:0;padding-left:18px;color:var(--muted);font-size:.9rem}
 `;
 
-export const APP_JS = String.raw`(function () {
+const CLIENT_JS = String.raw`(function () {
   "use strict";
-  var STEPS = ["Cart", "Payment", "Locker", "Confirmation"];
-  var state = { step: 0, catalog: null, qty: {}, discount: "", method: "blik", blik: "123456", locker: "", quote: null, order: null, extra: null };
+  var I18N = __I18N__;
+  var MONEY = __MONEY__;
+  __FORMAT_MONEY__
+  var STEP_KEYS = ["step.cart", "step.payment", "step.locker", "step.confirm"];
+  var state = { step: 0, catalog: null, qty: {}, discount: "", method: "blik", blik: "123456", locker: "", quote: null, order: null, extra: null, errorCode: "" };
+  var lang = readLang();
+
+  function save(l) { try { localStorage.setItem("lang", l); } catch (e) { /* storage may be blocked */ } }
+  function readLang() {
+    var q = null;
+    try { q = new URLSearchParams(location.search).get("lang"); } catch (e) { /* ignore */ }
+    if (q === "pl" || q === "en") { save(q); return q; }
+    try { var s = localStorage.getItem("lang"); if (s === "pl" || s === "en") return s; } catch (e) { /* ignore */ }
+    return "pl";
+  }
+
+  function has(key) { return I18N[lang][key] !== undefined; }
+  function t(key, params) {
+    var text = I18N[lang][key];
+    if (text === undefined) return key;
+    Object.keys(params || {}).forEach(function (k) { text = text.split("{" + k + "}").join(String(params[k])); });
+    return text;
+  }
 
   function el(tag, props, kids) {
     var node = document.createElement(tag);
@@ -90,21 +141,30 @@ export const APP_JS = String.raw`(function () {
     return node;
   }
 
-  function pln(g) {
-    var neg = g < 0; g = Math.abs(g);
-    var z = String(Math.floor(g / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-    var r = String(g % 100); if (r.length < 2) r = "0" + r;
-    return (neg ? "-" : "") + z + "," + r + " zł";
+  function money(g) { return formatMoney(g, MONEY[lang]); }
+  function fmtDate(iso) {
+    try { return new Date(iso + "T00:00:00Z").toLocaleDateString(lang === "pl" ? "pl-PL" : "en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }); }
+    catch (e) { return iso; }
   }
+  function productName(p) { return has("product." + p.sku + ".name") ? t("product." + p.sku + ".name") : p.name; }
+  function productDesc(p) { return has("product." + p.sku + ".desc") ? t("product." + p.sku + ".desc") : p.description; }
+  function lockerName(l) { return has("locker." + l.code) ? t("locker." + l.code) : l.name + ", " + l.city; }
+  function label(prefix, value) { return has(prefix + "." + value) ? t(prefix + "." + value) : value; }
 
-  function showError(msg) {
+  function ApiError(code) { this.code = code; }
+  function showError(code) {
+    state.errorCode = code || "";
     var e = document.getElementById("error");
-    e.textContent = msg || ""; e.hidden = !msg;
+    e.textContent = code ? (has("err." + code) ? t("err." + code) : t("err.unknown")) : "";
+    e.hidden = !code;
   }
+  function fail(e) { showError(e && e.code ? e.code : "unknown"); }
 
   function api(path, method, body) {
     return fetch(path, { method: method || "GET", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined })
-      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "Request failed"); return d; }); });
+      .then(function (r) {
+        return r.json().then(function (d) { if (!r.ok) throw new ApiError(d.code || "unknown"); return d; }, function () { throw new ApiError("unknown"); });
+      }, function () { throw new ApiError("network"); });
   }
 
   function items() {
@@ -114,46 +174,46 @@ export const APP_JS = String.raw`(function () {
   function renderSteps() {
     var ol = document.getElementById("steps");
     ol.textContent = "";
-    STEPS.forEach(function (name, i) {
-      ol.appendChild(el("li", { class: i === state.step ? "active" : i < state.step ? "done" : "", text: (i + 1) + ". " + name }));
+    STEP_KEYS.forEach(function (key, i) {
+      ol.appendChild(el("li", { class: i === state.step ? "active" : i < state.step ? "done" : "", text: (i + 1) + ". " + t(key) }));
     });
   }
 
   function totalsCard(q) {
     var card = el("div", { class: "card" });
-    function line(label, value) { card.appendChild(el("div", { class: "row" }, [el("span", { class: "grow", text: label }), el("span", { class: "price", text: value })])); }
-    line("Goods", pln(q.itemsGross));
-    if (q.discountTotal > 0) line("Discount", "-" + pln(q.discountTotal));
-    line("Delivery to locker", q.shippingGross === 0 ? "free" : pln(q.shippingGross));
-    q.vat.forEach(function (v) { line("of which VAT " + v.rate + "% (net " + pln(v.net) + ")", pln(v.vat)); });
-    card.appendChild(el("div", { class: "row" }, [el("strong", { class: "grow", text: "Total (gross)" }), el("strong", { class: "price", text: pln(q.totalGross) })]));
+    function line(text, value) { card.appendChild(el("div", { class: "row" }, [el("span", { class: "grow", text: text }), el("span", { class: "price", text: value })])); }
+    line(t("totals.goods"), money(q.itemsGross));
+    if (q.discountTotal > 0) line(t("totals.discount"), "-" + money(q.discountTotal));
+    line(t("totals.delivery"), q.shippingGross === 0 ? t("totals.free") : money(q.shippingGross));
+    q.vat.forEach(function (v) { line(t("totals.vat", { rate: v.rate, net: money(v.net) }), money(v.vat)); });
+    card.appendChild(el("div", { class: "row" }, [el("strong", { class: "grow", text: t("totals.total") }), el("strong", { class: "price", text: money(q.totalGross) })]));
     return card;
   }
 
   function refreshQuote() {
     if (items().length === 0) { state.quote = null; render(); return Promise.resolve(); }
     return api("/api/quote", "POST", { items: items(), discountCode: state.discount }).then(function (q) { state.quote = q; showError(""); render(); })
-      .catch(function (e) { state.quote = null; showError(e.message); render(); });
+      .catch(function (e) { state.quote = null; fail(e); render(); });
   }
 
   function viewCart() {
     var p = el("div");
-    p.appendChild(el("h2", { text: "Cart" }));
+    p.appendChild(el("h2", { text: t("cart.title") }));
     var card = el("div", { class: "card" });
     state.catalog.products.forEach(function (prod) {
-      var input = el("input", { type: "number", min: "0", max: "99", value: String(state.qty[prod.sku] || 0), "aria-label": "Quantity of " + prod.name });
+      var input = el("input", { type: "number", min: "0", max: "99", value: String(state.qty[prod.sku] || 0), "aria-label": t("cart.qtyAria", { name: productName(prod) }) });
       input.addEventListener("change", function () { state.qty[prod.sku] = Math.max(0, Math.min(99, parseInt(input.value, 10) || 0)); refreshQuote(); });
       card.appendChild(el("div", { class: "row" }, [
-        el("div", { class: "grow" }, [el("div", { text: prod.name }), el("div", { class: "muted small", text: prod.description + ", VAT " + prod.vatRate + "%" })]),
-        el("span", { class: "price", text: pln(prod.unitGross) }), input
+        el("div", { class: "grow" }, [el("div", { text: productName(prod) }), el("div", { class: "muted small", text: productDesc(prod) + ", " + t("cart.vat", { rate: prod.vatRate }) })]),
+        el("span", { class: "price", text: money(prod.unitGross) }), input
       ]));
     });
     p.appendChild(card);
-    var code = el("input", { type: "text", placeholder: "Discount code", value: state.discount, "aria-label": "Discount code" });
+    var code = el("input", { type: "text", placeholder: t("cart.discountPlaceholder"), value: state.discount, "aria-label": t("cart.discountAria") });
     code.addEventListener("change", function () { state.discount = code.value; refreshQuote(); });
-    p.appendChild(el("div", { class: "card" }, [code, el("span", { class: "muted small", text: " Try: " + state.catalog.discountCodes.join(", ") })]));
+    p.appendChild(el("div", { class: "card" }, [code, el("span", { class: "muted small", text: " " + t("cart.try") + " " + state.catalog.discountCodes.join(", ") })]));
     if (state.quote) p.appendChild(totalsCard(state.quote));
-    p.appendChild(el("div", { class: "actions" }, [el("button", { class: "primary", text: "Continue to payment", disabled: state.quote ? null : "disabled", onclick: function () { state.step = 1; render(); } })]));
+    p.appendChild(el("div", { class: "actions" }, [el("button", { class: "primary", text: t("cart.continue"), disabled: state.quote ? null : "disabled", onclick: function () { state.step = 1; render(); } })]));
     return p;
   }
 
@@ -161,27 +221,24 @@ export const APP_JS = String.raw`(function () {
     var input = el("input", { type: "radio", name: name, value: value });
     if (checked) input.checked = true;
     input.addEventListener("change", onChange);
-    return el("label", { class: "opt" + (checked ? " sel" : "") }, [input, el("span", {}, [el("strong", { text: title }), el("div", { class: "muted small", text: hint })])]);
+    return el("label", { class: "opt" + (checked ? " sel" : "") }, [input, el("span", {}, [el("strong", { text: title }), hint ? el("div", { class: "muted small", text: hint }) : null])]);
   }
 
   function viewPayment() {
     var p = el("div");
-    p.appendChild(el("h2", { text: "Payment" }));
-    var methods = [
-      ["blik", "BLIK", "6-digit code from your banking app. Mock codes: 222222 is declined, 333333 is delayed, anything else succeeds."],
-      ["card", "Card", "Mock redirect to a fake 3-D Secure page. Always succeeds."],
-      ["transfer", "Bank transfer", "Asynchronous: stays pending until you confirm it on the last step."]
-    ];
-    methods.forEach(function (m) { p.appendChild(radio("method", m[0], m[1], m[2], state.method === m[0], function () { state.method = m[0]; render(); })); });
+    p.appendChild(el("h2", { text: t("pay.title") }));
+    ["blik", "card", "transfer"].forEach(function (m) {
+      p.appendChild(radio("method", m, t("method." + m), t("method." + m + ".hint"), state.method === m, function () { state.method = m; render(); }));
+    });
     if (state.method === "blik") {
-      var b = el("input", { type: "text", inputmode: "numeric", maxlength: "6", value: state.blik, "aria-label": "BLIK code" });
+      var b = el("input", { type: "text", inputmode: "numeric", maxlength: "6", value: state.blik, "aria-label": t("pay.blikCode") });
       b.addEventListener("input", function () { state.blik = b.value; });
-      p.appendChild(el("div", { class: "card" }, [el("label", { text: "BLIK code " }, [b])]));
+      p.appendChild(el("div", { class: "card" }, [el("label", { text: t("pay.blikCode") + " " }, [b])]));
     }
     p.appendChild(el("div", { class: "actions" }, [
-      el("button", { text: "Back", onclick: function () { state.step = 0; render(); } }),
-      el("button", { class: "primary", text: "Continue to locker", onclick: function () {
-        if (state.method === "blik" && !/^\d{6}$/.test(state.blik)) { showError("BLIK code must be 6 digits"); return; }
+      el("button", { text: t("pay.back"), onclick: function () { state.step = 0; render(); } }),
+      el("button", { class: "primary", text: t("pay.continue"), onclick: function () {
+        if (state.method === "blik" && !/^\d{6}$/.test(state.blik)) { showError("bad_blik"); return; }
         showError(""); state.step = 2; render(); } })
     ]));
     return p;
@@ -189,18 +246,18 @@ export const APP_JS = String.raw`(function () {
 
   function viewLocker() {
     var p = el("div");
-    p.appendChild(el("h2", { text: "Parcel locker (paczkomat)" }));
-    p.appendChild(el("p", { class: "muted", text: "Pick a mock locker or type a code. The code format check is an example pattern, not an official carrier specification." }));
+    p.appendChild(el("h2", { text: t("locker.title") }));
+    p.appendChild(el("p", { class: "muted", text: t("locker.intro") }));
     state.catalog.lockers.forEach(function (l) {
-      p.appendChild(radio("locker", l.code, l.code + " " + l.name, l.city, state.locker === l.code, function () { state.locker = l.code; render(); }));
+      p.appendChild(radio("locker", l.code, l.code + " " + lockerName(l), "", state.locker === l.code, function () { state.locker = l.code; render(); }));
     });
-    var c = el("input", { type: "text", value: state.locker, maxlength: "10", "aria-label": "Locker code", placeholder: "e.g. WAW123M" });
+    var c = el("input", { type: "text", value: state.locker, maxlength: "10", "aria-label": t("locker.codeAria"), placeholder: t("locker.placeholder") });
     c.addEventListener("input", function () { state.locker = c.value; });
-    p.appendChild(el("div", { class: "card" }, [el("label", { text: "Locker code " }, [c])]));
+    p.appendChild(el("div", { class: "card" }, [el("label", { text: t("locker.codeLabel") + " " }, [c])]));
     if (state.quote) p.appendChild(totalsCard(state.quote));
     p.appendChild(el("div", { class: "actions" }, [
-      el("button", { text: "Back", onclick: function () { state.step = 1; render(); } }),
-      el("button", { class: "primary", text: "Place order", onclick: placeOrder })
+      el("button", { text: t("pay.back"), onclick: function () { state.step = 1; render(); } }),
+      el("button", { class: "primary", text: t("locker.place"), onclick: placeOrder })
     ]));
     return p;
   }
@@ -208,48 +265,60 @@ export const APP_JS = String.raw`(function () {
   function placeOrder() {
     api("/api/orders", "POST", { items: items(), discountCode: state.discount, method: state.method, blikCode: state.blik, lockerCode: state.locker })
       .then(function (d) { state.order = d.order; state.extra = null; showError(""); state.step = 3; render(); })
-      .catch(function (e) { showError(e.message); });
+      .catch(fail);
   }
 
-  function orderAction(path, label, primary) {
-    return el("button", { class: primary ? "primary" : "", text: label, onclick: function () {
+  function orderAction(path, text, primary) {
+    return el("button", { class: primary ? "primary" : "", text: text, onclick: function () {
       api("/api/orders/" + state.order.id + path, "POST").then(function (d) {
         state.order = d.order; state.extra = d; showError(""); render();
-      }).catch(function (e) { showError(e.message); });
+      }).catch(fail);
     } });
+  }
+
+  function anomalyText(raw) {
+    var m = /ignored: (\w+)/.exec(raw);
+    return m && has("anomaly." + m[1]) ? t("anomaly." + m[1]) : t("anomaly.generic");
   }
 
   function viewConfirm() {
     var o = state.order;
     var p = el("div");
-    p.appendChild(el("h2", { text: "Order " + o.id }));
+    p.appendChild(el("h2", { text: t("confirm.title", { id: o.id }) }));
     var good = o.state === "paid" || o.state === "shipped" || o.state === "fulfilled";
     var bad = o.state === "payment_failed" || o.state === "cancelled";
     p.appendChild(el("div", { class: "card" }, [
-      el("div", { class: "row" }, [el("span", { class: "grow", text: "Status" }), el("span", { class: "badge " + (good ? "ok" : bad ? "bad" : ""), text: o.state })]),
-      el("div", { class: "row" }, [el("span", { class: "grow", text: "Payment" }), el("span", { text: o.paymentMethod + " (" + o.paymentId + ")" })]),
-      el("div", { class: "row" }, [el("span", { class: "grow", text: "Locker" }), el("span", { text: o.lockerCode })]),
-      o.trackingNumber ? el("div", { class: "row" }, [el("span", { class: "grow", text: "Tracking number" }), el("span", { text: o.trackingNumber })]) : null,
-      el("div", { class: "row" }, [el("strong", { class: "grow", text: "Total (gross)" }), el("strong", { class: "price", text: pln(o.totals.totalGross) })])
+      el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.status") }), el("span", { class: "badge " + (good ? "ok" : bad ? "bad" : ""), text: label("state", o.state) })]),
+      el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.payment") }), el("span", { text: label("method", o.paymentMethod) + " (" + o.paymentId + ")" })]),
+      el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.locker") }), el("span", { text: o.lockerCode })]),
+      o.trackingNumber ? el("div", { class: "row" }, [el("span", { class: "grow", text: t("confirm.tracking") }), el("span", { text: o.trackingNumber })]) : null,
+      el("div", { class: "row" }, [el("strong", { class: "grow", text: t("totals.total") }), el("strong", { class: "price", text: money(o.totals.totalGross) })])
     ]));
-    if (state.extra && state.extra.label) p.appendChild(el("pre", { text: state.extra.label }));
+    if (state.extra && state.extra.label) {
+      p.appendChild(el("pre", { text: [t("confirm.label"), t("confirm.tracking") + ": " + o.trackingNumber, t("confirm.labelOrder") + ": " + o.id, t("confirm.locker") + ": " + o.lockerCode].join("\n") }));
+    }
     if (state.extra && state.extra.withdrawal) {
       var w = state.extra.withdrawal;
-      p.appendChild(el("p", { class: "muted", text: "Withdrawal period ends on " + w.lastDay + " (" + (w.open ? "still open" : "closed") + "). Illustration only, not legal advice." }));
+      p.appendChild(el("p", { class: "muted", text: t(w.open ? "confirm.withdrawalOpen" : "confirm.withdrawalClosed", { date: fmtDate(w.lastDay) }) }));
     }
     var a = el("div", { class: "actions" });
-    if (o.state === "awaiting_payment") a.appendChild(orderAction("/settle", "Simulate: payment confirmed", true));
-    if (o.state === "paid") a.appendChild(orderAction("/ship", "Ship to locker", true));
-    if (o.state === "shipped") a.appendChild(orderAction("/deliver", "Mark as picked up", true));
-    if (["paid", "shipped", "fulfilled"].indexOf(o.state) >= 0) a.appendChild(orderAction("/refund", "Request refund"));
-    a.appendChild(orderAction("/redeliver", "Replay last webhook (idempotency)"));
-    a.appendChild(el("button", { text: "Start over", onclick: function () { state.qty = {}; state.quote = null; state.order = null; state.step = 0; render(); } }));
+    if (o.state === "awaiting_payment") a.appendChild(orderAction("/settle", t("action.settle"), true));
+    if (o.state === "paid") a.appendChild(orderAction("/ship", t("action.ship"), true));
+    if (o.state === "shipped") a.appendChild(orderAction("/deliver", t("action.deliver"), true));
+    if (["paid", "shipped", "fulfilled"].indexOf(o.state) >= 0) a.appendChild(orderAction("/refund", t("action.refund")));
+    a.appendChild(orderAction("/redeliver", t("action.redeliver")));
+    a.appendChild(el("button", { text: t("action.startOver"), onclick: function () { state.qty = {}; state.quote = null; state.order = null; state.step = 0; render(); } }));
     p.appendChild(a);
-    if (state.extra && state.extra.outcome) p.appendChild(el("p", { class: "muted small", text: "Replay result: " + state.extra.outcome + " (no second effect)." }));
+    if (state.extra && state.extra.outcome) p.appendChild(el("p", { class: "muted small", text: t("confirm.replay", { outcome: label("outcome", state.extra.outcome) }) }));
+    p.appendChild(el("h3", { class: "small muted", text: t("confirm.history") }));
     var h = el("ul", { class: "hist" });
-    o.history.forEach(function (x) { h.appendChild(el("li", { text: x.from + " -> " + x.to + " (" + x.event + ")" })); });
+    o.history.forEach(function (x) { h.appendChild(el("li", { text: label("state", x.from) + " -> " + label("state", x.to) + " (" + label("event", x.event) + ")" })); });
     p.appendChild(h);
-    if (o.anomalies.length) p.appendChild(el("p", { class: "error", text: o.anomalies.join("; ") }));
+    if (o.anomalies.length) {
+      var box = el("div", { class: "error" }, [el("strong", { text: t("confirm.anomalies") })]);
+      o.anomalies.forEach(function (x) { box.appendChild(el("div", { text: anomalyText(x) })); });
+      p.appendChild(box);
+    }
     return p;
   }
 
@@ -257,9 +326,42 @@ export const APP_JS = String.raw`(function () {
     renderSteps();
     var panel = document.getElementById("panel");
     panel.textContent = "";
+    if (!state.catalog) return;
     panel.appendChild([viewCart, viewPayment, viewLocker, viewConfirm][state.step]());
   }
 
-  api("/api/catalog").then(function (c) { state.catalog = c; state.qty[c.products[0].sku] = 1; return refreshQuote(); }).catch(function (e) { showError(e.message); });
+  function applyStatic() {
+    document.documentElement.lang = lang;
+    document.title = t("htmlTitle");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n]"), function (n) { n.textContent = t(n.getAttribute("data-i18n")); });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n-aria]"), function (n) { n.setAttribute("aria-label", t(n.getAttribute("data-i18n-aria"))); });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-lang]"), function (n) { n.setAttribute("aria-pressed", String(n.getAttribute("data-lang") === lang)); });
+  }
+
+  function setLang(l) {
+    lang = l;
+    save(l);
+    try {
+      var u = new URL(location.href);
+      if (u.searchParams.has("lang")) { u.searchParams.set("lang", l); history.replaceState(null, "", u.toString()); }
+    } catch (e) { /* ignore */ }
+    applyStatic();
+    showError(state.errorCode);
+    render();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll("[data-lang]"), function (b) {
+    b.addEventListener("click", function () { setLang(b.getAttribute("data-lang")); });
+  });
+  applyStatic();
+  renderSteps();
+
+  api("/api/catalog").then(function (c) { state.catalog = c; state.qty[c.products[0].sku] = 1; return refreshQuote(); }).catch(fail);
 })();
 `;
+
+/** Client script with the dictionaries and the money formatter embedded. */
+export const APP_JS = CLIENT_JS
+  .replace("__I18N__", () => JSON.stringify(DICTIONARIES))
+  .replace("__MONEY__", () => JSON.stringify(MONEY_FORMATS))
+  .replace("__FORMAT_MONEY__", () => FORMAT_MONEY_SOURCE);

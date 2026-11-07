@@ -128,13 +128,20 @@ describe("not indexed on purpose", () => {
 });
 
 describe("public demo framing", () => {
-  it("shows the simulation banner and the call to action without external resources", async () => {
-    const html = (await call(createApp({}, () => NOW), "/")).data as string;
-    expect(html).toContain("Demo with simulated payment and parcel-locker providers. No real payments or shipments.");
-    expect(html).toContain("Need a shop built or fixed?");
-    expect(html).toMatch(/<a href="https:\/\/piotrmajkutewicz\.pl" rel="noopener">Talk to Piotr Majkutewicz\.<\/a>/);
-    // Only the owner's link may point off-site; scripts and styles are same-origin.
-    const urls = [...html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)].map((m) => m[1]);
-    expect(urls).toEqual(["https://piotrmajkutewicz.pl"]);
+  it("shows the simulation banner and the call to action in both languages, without external resources", async () => {
+    const app = createApp({}, () => NOW);
+    const cases: Array<[string, string, string, string]> = [
+      ["/", "Demo z symulowanymi dostawcami płatności i paczkomatów. Bez prawdziwych płatności i przesyłek.", "Potrzebujesz sklepu lub poprawek w istniejącym?", "Napisz do Piotra Majkutewicza."],
+      ["/?lang=en", "Demo with simulated payment and parcel-locker providers. No real payments or shipments.", "Need a shop built or fixed?", "Talk to Piotr Majkutewicz."],
+    ];
+    for (const [path, banner, lead, link] of cases) {
+      const html = (await call(app, path)).data as string;
+      expect(html).toContain(banner);
+      expect(html).toContain(lead);
+      expect(html).toContain(`<a href="https://piotrmajkutewicz.pl" rel="noopener" data-i18n="ctaLink">${link}</a>`);
+      // Only the owner's link may point off-site; scripts and styles are same-origin.
+      const urls = [...html.matchAll(/(?:src|href)="(https?:[^"]+)"/g)].map((m) => m[1]);
+      expect(urls).toEqual(["https://piotrmajkutewicz.pl"]);
+    }
   });
 });
