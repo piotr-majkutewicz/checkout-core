@@ -13,8 +13,20 @@ export interface OrderStore {
   update<T>(id: string, fn: (order: Order) => { order: Order; result: T }): Promise<T | undefined>;
 }
 
+export interface InMemoryOrderStoreOptions {
+  /** Keep at most this many orders; when a new order id is saved, the oldest one is dropped. Default: unbounded. */
+  maxOrders?: number;
+}
+
 export class InMemoryOrderStore implements OrderStore {
   private readonly orders = new Map<string, Order>();
+  private readonly maxOrders: number;
+
+  constructor(options: InMemoryOrderStoreOptions = {}) {
+    const max = options.maxOrders ?? Infinity;
+    if (!(max >= 1)) throw new RangeError("maxOrders must be at least 1");
+    this.maxOrders = max;
+  }
 
   async get(id: string): Promise<Order | undefined> {
     return this.orders.get(id);
@@ -22,6 +34,11 @@ export class InMemoryOrderStore implements OrderStore {
 
   async save(order: Order): Promise<void> {
     this.orders.set(order.id, order);
+    // Map iterates in insertion order, so the first key is the oldest order.
+    while (this.orders.size > this.maxOrders) {
+      const oldest = this.orders.keys().next().value as string;
+      this.orders.delete(oldest);
+    }
   }
 
   async update<T>(id: string, fn: (order: Order) => { order: Order; result: T }): Promise<T | undefined> {

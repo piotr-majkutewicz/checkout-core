@@ -38,6 +38,8 @@ export interface MockProviderOptions {
   now?: () => number;
   /** How far a webhook timestamp may differ from now, in seconds. Default 300. */
   toleranceSeconds?: number;
+  /** Keep at most this many payments in memory, dropping the oldest. Default: unbounded. */
+  maxPayments?: number;
 }
 
 /**
@@ -87,6 +89,10 @@ export class MockProvider implements PaymentProvider {
       sequence: 0,
     };
     this.payments.set(id, payment);
+    const maxPayments = this.options.maxPayments ?? Infinity;
+    while (this.payments.size > maxPayments) {
+      this.payments.delete(this.payments.keys().next().value as string);
+    }
 
     const scenario = this.pickScenario(request);
     if (scenario === "success") this.resolve(payment, "payment.succeeded");
