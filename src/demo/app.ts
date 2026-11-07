@@ -175,7 +175,7 @@ export function createApp(env: DemoEnv = {}, now: () => Date = () => new Date())
         const d = lastDelivery.get(id);
         if (!d) throw new HttpError(404, "No webhook delivered yet");
         const outcome = await handleWebhook(payments, store, d.body, d.headers, now);
-        return json({ outcome: outcome.status, order: await withLegal(await mustOrder(id)) });
+        return json({ outcome: outcome.status, ...(await withLegal(await mustOrder(id))) });
       }
       if (method === "POST" && action === "ship") {
         const order = await mustOrder(id);

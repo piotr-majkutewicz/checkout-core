@@ -74,7 +74,7 @@ export const APP_JS = String.raw`(function () {
       if (k === "text") node.textContent = props[k];
       else if (k.indexOf("on") === 0) node.addEventListener(k.slice(2), props[k]);
       else if (k === "class") node.className = props[k];
-      else node.setAttribute(k, props[k]);
+      else if (props[k] !== null) node.setAttribute(k, props[k]);
     });
     (kids || []).forEach(function (c) { if (c) node.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
     return node;

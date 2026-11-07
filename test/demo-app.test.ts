@@ -74,7 +74,7 @@ describe("demo app", () => {
     expect((await call(app, `/api/orders/${id}/settle`, "POST")).data.order.state).toBe("paid");
     const replay = await call(app, `/api/orders/${id}/redeliver`, "POST");
     expect(replay.data.outcome).toBe("duplicate");
-    expect(replay.data.order.order.history).toHaveLength(2);
+    expect(replay.data.order.history).toHaveLength(2);
   });
 
   it("declined BLIK ends in payment_failed", async () => {
